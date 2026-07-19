@@ -26,19 +26,29 @@ model Team {
   events         Event[]
   messages       Message[]
   directMessages DirectMessage[]
+
 }
 
 // A user account. A single person can belong to multiple teams (e.g. a coach
 // running two squads, or a parent with kids on different teams) via Membership.
+//
+// Credentials are no longer stored here - WordPress (the FBI Academy Coach
+// Portal plugin) is the single source of truth for identity as of the full
+// integration work (see INTEGRATION_ARCHITECTURE.md). wpUserId links this
+// row to its WordPress wp_users.ID; passwordHash is kept only for backward
+// compatibility with any rows created before the bridge existed and is no
+// longer read or written by the login flow.
 model User {
   id           String   @id @default(cuid())
   email        String   @unique
-  passwordHash String
+  passwordHash String?
+  wpUserId     Int?     @unique
   createdAt    DateTime @default(now())
 
   memberships             Membership[]
   sentDirectMessages      DirectMessage[] @relation("SentMessages")
   receivedDirectMessages  DirectMessage[] @relation("ReceivedMessages")
+
 }
 
 // Join model: one row per (user, team) pair, carrying that user's role on
@@ -102,6 +112,7 @@ model PlayerVideo {
   url       String
   position  Int      @default(0)
   createdAt DateTime @default(now())
+
 }
 
 // Qualitative Development Evaluation (QDE): a periodic coach assessment of
@@ -127,6 +138,7 @@ model PlayerEvaluation {
   concentration  Int
 
   createdAt DateTime @default(now())
+
 }
 
 model Event {
@@ -141,6 +153,7 @@ model Event {
   notes     String?
   createdAt DateTime @default(now())
   rsvps     RSVP[]
+
 }
 
 model RSVP {
@@ -165,6 +178,7 @@ model Message {
   body           String
   isAnnouncement Boolean  @default(false)
   createdAt      DateTime @default(now())
+
 }
 
 // 1:1 direct message between two users who share a team.
