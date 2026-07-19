@@ -2,20 +2,17 @@
 // Hosted on Supabase Postgres in production.
 
 generator client {
-  provider        = "prisma-client-js"
-  previewFeatures = ["multiSchema"]
+  provider = "prisma-client-js"
 }
 
-// This Supabase project also hosts the separate "Training Sessions" app
-// (organizations/app_users/teams/sessions/etc. in the public schema, plus
-// Supabase's own auth schema). Declaring both schemas here just tells
-// Prisma they exist - TeamSync's own tables below are still isolated to
-// the public schema via @@schema("public") and never touch that app's
-// tables or data.
+// This Supabase project also hosts a separate "Training Sessions" app
+// (organizations/app_users/teams/sessions/etc., already in the public
+// schema). TeamSync's tables are applied via versioned SQL migrations
+// (prisma/migrations) rather than `db push`, specifically so nothing here
+// can ever diff against - and try to drop - that other app's tables.
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
-  schemas  = ["public", "auth"]
 }
 
 model Team {
@@ -29,8 +26,6 @@ model Team {
   events         Event[]
   messages       Message[]
   directMessages DirectMessage[]
-
-  @@schema("public")
 }
 
 // A user account. A single person can belong to multiple teams (e.g. a coach
@@ -44,8 +39,6 @@ model User {
   memberships             Membership[]
   sentDirectMessages      DirectMessage[] @relation("SentMessages")
   receivedDirectMessages  DirectMessage[] @relation("ReceivedMessages")
-
-  @@schema("public")
 }
 
 // Join model: one row per (user, team) pair, carrying that user's role on
@@ -63,7 +56,6 @@ model Membership {
   createdAt DateTime @default(now())
 
   @@unique([userId, teamId])
-  @@schema("public")
 }
 
 model Player {
@@ -97,7 +89,6 @@ model Player {
   evaluations PlayerEvaluation[]
 
   @@index([wordpressPostId])
-  @@schema("public")
 }
 
 // A video link shown on a player's profile (title + URL, e.g. YouTube/Vimeo).
@@ -111,8 +102,6 @@ model PlayerVideo {
   url       String
   position  Int      @default(0)
   createdAt DateTime @default(now())
-
-  @@schema("public")
 }
 
 // Qualitative Development Evaluation (QDE): a periodic coach assessment of
@@ -138,8 +127,6 @@ model PlayerEvaluation {
   concentration  Int
 
   createdAt DateTime @default(now())
-
-  @@schema("public")
 }
 
 model Event {
@@ -154,8 +141,6 @@ model Event {
   notes     String?
   createdAt DateTime @default(now())
   rsvps     RSVP[]
-
-  @@schema("public")
 }
 
 model RSVP {
@@ -168,7 +153,6 @@ model RSVP {
   respondedAt DateTime?
 
   @@unique([eventId, playerId])
-  @@schema("public")
 }
 
 // Team-wide chat / announcements (broadcast to everyone on the team).
@@ -181,8 +165,6 @@ model Message {
   body           String
   isAnnouncement Boolean  @default(false)
   createdAt      DateTime @default(now())
-
-  @@schema("public")
 }
 
 // 1:1 direct message between two users who share a team.
@@ -199,5 +181,4 @@ model DirectMessage {
   createdAt   DateTime  @default(now())
 
   @@index([teamId, senderId, recipientId])
-  @@schema("public")
 }
