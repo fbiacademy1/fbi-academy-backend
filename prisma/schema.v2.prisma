@@ -89,6 +89,11 @@ model Player {
   wordpressPostId  Int?
   lastSyncedHash   String?
   syncStatus       String   @default("pending")
+  // Links this per-team roster row to a single global player profile in
+  // the FBI Academy Coach Portal (WordPress). NOT unique - one real person
+  // can have a separate Player row (and this same wpPlayerId) on every
+  // team they're rostered to. See INTEGRATION_ARCHITECTURE.md.
+  wpPlayerId       Int?
 
   updatedAt   DateTime @updatedAt
   createdAt   DateTime @default(now())
@@ -99,6 +104,7 @@ model Player {
   evaluations PlayerEvaluation[]
 
   @@index([wordpressPostId])
+  @@index([wpPlayerId])
 }
 
 // A video link shown on a player's profile (title + URL, e.g. YouTube/Vimeo).
