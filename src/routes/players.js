@@ -3,6 +3,7 @@ const bcrypt = require("bcryptjs");
 const prisma = require("../db");
 const { requireAuth, requireTeamMembership, requireRole } = require("../middleware/auth");
 const { pushPlayerToWordpress } = require("../services/wordpressSync");
+const { pushTeamAssignmentToWordpress } = require("../services/teamAssignmentSync");
 const asyncHandler = require("../middleware/asyncHandler");
 
 const router = express.Router();
@@ -110,6 +111,15 @@ router.post("/", requireRole("admin", "coach"), asyncHandler(async (req, res) =>
   }
 
   pushPlayerToWordpress(player.id).catch((e) => console.error(e));
+  // If this roster row is linked to a global WordPress player account
+  // (wpPlayerId), tell WordPress this team should be added to that
+  // player's pp_team_ids too - e.g. a coach rostering an existing WP
+  // player onto a second TeamSync team.
+  if (player.wpPlayerId) {
+    pushTeamAssignmentToWordpress(player.wpPlayerId).catch((e) =>
+      console.error("[teamAssignmentSync] push on create failed:", e.message)
+    );
+  }
   res.status(201).json({ ...player, loginCreated: !!membership, linkedExisting });
 }));
 
@@ -171,6 +181,15 @@ router.delete("/:id", requireRole("admin", "coach"), asyncHandler(async (req, re
     prisma.membership.deleteMany({ where: { playerId: player.id } }),
     prisma.player.delete({ where: { id: player.id } }),
   ]);
+
+  // Mirror the removal to WordPress: this player's pp_team_ids should no
+  // longer include this team. (Deleted-inside-transaction row is gone from
+  // TeamSync, so this pull's the player's now-shorter remaining team list.)
+  if (player.wpPlayerId) {
+    pushTeamAssignmentToWordpress(player.wpPlayerId).catch((e) =>
+      console.error("[teamAssignmentSync] push on delete failed:", e.message)
+    );
+  }
 
   res.status(204).end();
 }));
