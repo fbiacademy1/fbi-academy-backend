@@ -49,6 +49,8 @@ function requireRole(...roles) {
 }
 
 // Verifies requests coming FROM WordPress carry the shared secret.
+// (This guards the OLDER teamsync-sync.php plugin's webhook specifically -
+// see requireFbiSecret below for the newer fbi/v1 integration's webhooks.)
 function requireWordpressSecret(req, res, next) {
   const secret = req.headers["x-teamsync-secret"];
   if (!secret || secret !== process.env.WORDPRESS_SYNC_SECRET) {
@@ -57,4 +59,17 @@ function requireWordpressSecret(req, res, next) {
   next();
 }
 
-module.exports = { requireAuth, requireTeamMembership, requireRole, requireWordpressSecret };
+// Verifies requests coming FROM the FBI Academy Coach Portal's fbi/v1
+// integration (auth bridge + team-assignment sync) carry the shared secret
+// set in WORDPRESS_AUTH_BRIDGE_SECRET / WordPress's Settings > FBI
+// Integration page. Kept separate from requireWordpressSecret above so the
+// two plugins' trust boundaries never overlap.
+function requireFbiSecret(req, res, next) {
+  const secret = req.headers["x-fbi-api-secret"];
+  if (!secret || secret !== process.env.WORDPRESS_AUTH_BRIDGE_SECRET) {
+    return res.status(401).json({ error: "Invalid sync secret" });
+  }
+  next();
+}
+
+module.exports = { requireAuth, requireTeamMembership, requireRole, requireWordpressSecret, requireFbiSecret };
