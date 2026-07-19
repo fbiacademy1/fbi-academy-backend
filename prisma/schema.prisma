@@ -1,0 +1,179 @@
+// TeamSync data model
+// Hosted on Supabase Postgres in production.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Team {
+  id        String    @id @default(cuid())
+  name      String
+  sport     String
+  season    String?
+  createdAt DateTime  @default(now())
+  memberships    Membership[]
+  players        Player[]
+  events         Event[]
+  messages       Message[]
+  directMessages DirectMessage[]
+}
+
+// A user account. A single person can belong to multiple teams (e.g. a coach
+// running two squads, or a parent with kids on different teams) via Membership.
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  createdAt    DateTime @default(now())
+
+  memberships             Membership[]
+  sentDirectMessages      DirectMessage[] @relation("SentMessages")
+  receivedDirectMessages  DirectMessage[] @relation("ReceivedMessages")
+}
+
+// Join model: one row per (user, team) pair, carrying that user's role on
+// that specific team. This is what makes multi-team support possible - a
+// user's role/permissions are per-team, not global.
+model Membership {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  teamId    String
+  team      Team     @relation(fields: [teamId], references: [id])
+  role      String   // "admin" | "coach" | "player" | "parent"
+  playerId  String?  @unique
+  player    Player?  @relation(fields: [playerId], references: [id])
+  createdAt DateTime @default(now())
+
+  @@unique([userId, teamId])
+}
+
+model Player {
+  id                    String    @id @default(cuid())
+  teamId                String
+  team                  Team      @relation(fields: [teamId], references: [id])
+  firstName             String
+  lastName              String
+  email                 String?
+  phone                 String?
+  jerseyNumber          String?
+  position              String?
+  birthdate             DateTime?
+  photoUrl              String?
+  favoritePlayerPhotoUrl String?
+  guardianName          String?
+  emergencyContact      String?
+  notes                 String?
+
+  // --- WordPress sync fields ---
+  wordpressPostId  Int?
+  lastSyncedHash   String?
+  syncStatus       String   @default("pending")
+
+  updatedAt   DateTime @updatedAt
+  createdAt   DateTime @default(now())
+  rsvps       RSVP[]
+  membership  Membership?
+  messages    Message[]
+  videos      PlayerVideo[]
+  evaluations PlayerEvaluation[]
+
+  @@index([wordpressPostId])
+}
+
+// A video link shown on a player's profile (title + URL, e.g. YouTube/Vimeo).
+// WordPress is the source of truth for these - the coach adds them on the
+// player's WordPress profile, and they sync into the app via the webhook.
+model PlayerVideo {
+  id        String   @id @default(cuid())
+  playerId  String
+  player    Player   @relation(fields: [playerId], references: [id])
+  title     String
+  url       String
+  position  Int      @default(0)
+  createdAt DateTime @default(now())
+}
+
+// Qualitative Development Evaluation (QDE): a periodic coach assessment of
+// a player across 9 attributes, each scored 1 (developing) - 4 (elite).
+model PlayerEvaluation {
+  id             String   @id @default(cuid())
+  playerId       String
+  player         Player   @relation(fields: [playerId], references: [id])
+  evaluationDate DateTime @default(now())
+  evaluator      String?
+  heightWeight   String?
+  preferredFoot  String?
+  coachNotes     String?
+
+  strength       Int
+  speed          Int
+  quickness      Int
+  dribbling      Int
+  longPass       Int
+  mediumShot     Int
+  receiving      Int
+  pressAfterLoss Int
+  concentration  Int
+
+  createdAt DateTime @default(now())
+}
+
+model Event {
+  id        String   @id @default(cuid())
+  teamId    String
+  team      Team     @relation(fields: [teamId], references: [id])
+  type      String   // "game" | "practice" | "event" (team function)
+  title     String
+  location  String?
+  startTime DateTime
+  endTime   DateTime?
+  notes     String?
+  createdAt DateTime @default(now())
+  rsvps     RSVP[]
+}
+
+model RSVP {
+  id          String    @id @default(cuid())
+  eventId     String
+  event       Event     @relation(fields: [eventId], references: [id])
+  playerId    String
+  player      Player    @relation(fields: [playerId], references: [id])
+  status      String    @default("no_response") // "yes" | "no" | "maybe" | "no_response"
+  respondedAt DateTime?
+
+  @@unique([eventId, playerId])
+}
+
+// Team-wide chat / announcements (broadcast to everyone on the team).
+model Message {
+  id             String   @id @default(cuid())
+  teamId         String
+  team           Team     @relation(fields: [teamId], references: [id])
+  authorPlayerId String?
+  authorPlayer   Player?  @relation(fields: [authorPlayerId], references: [id])
+  body           String
+  isAnnouncement Boolean  @default(false)
+  createdAt      DateTime @default(now())
+}
+
+// 1:1 direct message between two users who share a team.
+model DirectMessage {
+  id          String    @id @default(cuid())
+  teamId      String
+  team        Team      @relation(fields: [teamId], references: [id])
+  senderId    String
+  sender      User      @relation("SentMessages", fields: [senderId], references: [id])
+  recipientId String
+  recipient   User      @relation("ReceivedMessages", fields: [recipientId], references: [id])
+  body        String
+  readAt      DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@index([teamId, senderId, recipientId])
+}
