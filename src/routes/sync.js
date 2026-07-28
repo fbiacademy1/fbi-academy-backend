@@ -1,7 +1,7 @@
 const express = require("express");
 const { requireWordpressSecret, requireFbiSecret } = require("../middleware/auth");
 const { applyWordpressWebhook } = require("../services/wordpressSync");
-const { applyWordpressTeamAssignment } = require("../services/teamAssignmentSync");
+const { applyWordpressTeamAssignment, applyWordpressCoachTeamAssignment, applyWordpressCreateTeam } = require("../services/teamAssignmentSync");
 const prisma = require("../db");
 
 const router = express.Router();
@@ -43,6 +43,33 @@ router.post("/wordpress-team-assignment", requireFbiSecret, async (req, res) => 
     console.error("[sync] team assignment webhook error:", err.message);
     res.status(400).json({ error: err.message });
   }
+});
+
+// POST /api/sync/wordpress-coach-team-assignment
+// Called by the Coach Portal's admin-only "Create Coach" screen whenever an
+// admin creates a coach or changes their team assignments there. Body:
+// { wpCoachId, email, firstName, lastName, teamIds }.
+router.post("/wordpress-coach-team-assignment", requireFbiSecret, async (req, res) => {
+    try {
+          const result = await applyWordpressCoachTeamAssignment(req.body);
+          res.json({ ok: true, ...result });
+    } catch (err) {
+          console.error("[sync] coach team assignment webhook error:", err.message);
+          res.status(400).json({ error: err.message });
+    }
+});
+
+// POST /api/sync/wordpress-create-team
+// Called by the Coach Portal's admin-only "+ Add Team" action to create a
+// brand-new team directly. Body: { name, sport, season }.
+router.post("/wordpress-create-team", requireFbiSecret, async (req, res) => {
+    try {
+          const result = await applyWordpressCreateTeam(req.body);
+          res.json({ ok: true, ...result });
+    } catch (err) {
+          console.error("[sync] create team webhook error:", err.message);
+          res.status(400).json({ error: err.message });
+    }
 });
 
 module.exports = router;
