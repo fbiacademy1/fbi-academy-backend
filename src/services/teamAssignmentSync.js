@@ -64,6 +64,67 @@ async function applyWordpressTeamAssignment({ wpPlayerId, firstName, lastName, t
 }
 
 /**
+ * Called when WordPress pushes a coach's full current team list (a coach
+  * created or edited via the Coach Portal's admin-only "Create Coach"
+   * screen). Unlike a player, a coach IS a TeamSync User directly (found or
+    * created via wpUserId) - there's no per-team Player row involved - so this
+     * reconciles Membership rows with role:"coach" directly on that User to
+      * match WordPress's pp_coach_team_ids field.
+       */
+async function applyWordpressCoachTeamAssignment({ wpCoachId, email, firstName, lastName, teamIds }) {
+    if (!wpCoachId) throw new Error("wpCoachId is required");
+    const newTeamIds = Array.isArray(teamIds) ? teamIds : [];
+  
+    let user = await prisma.user.findUnique({ where: { wpUserId: wpCoachId } });
+    if (!user) {
+          if (!email) throw new Error("email is required to create a new coach User");
+          const existingByEmail = await prisma.user.findUnique({ where: { email } });
+          user = existingByEmail
+            ? await prisma.user.update({ where: { id: existingByEmail.id }, data: { wpUserId: wpCoachId } })
+                  : await prisma.user.create({ data: { email, wpUserId: wpCoachId } });
+    } else if (email && user.email !== email) {
+          user = await prisma.user.update({ where: { id: user.id }, data: { email } });
+    }
+  
+    const existing = await prisma.membership.findMany({ where: { userId: user.id, role: "coach" } });
+    const existingTeamIds = existing.map((m) => m.teamId);
+  
+    const toAdd = newTeamIds.filter((id) => !existingTeamIds.includes(id));
+    const toRemove = existing.filter((m) => !newTeamIds.includes(m.teamId));
+  
+    for (const teamId of toAdd) {
+          await prisma.membership
+            .create({ data: { userId: user.id, teamId, role: "coach" } })
+            .catch((e) => console.error("[teamAssignmentSync] coach membership create skipped:", e.message));
+    }
+  
+    for (const membership of toRemove) {
+          await prisma.membership.delete({ where: { id: membership.id } });
+    }
+  
+    return { userId: user.id, added: toAdd.length, removed: toRemove.length };
+}
+
+/**
+ * Called from the Coach Portal's admin-only "+ Add Team" action to create a
+  * brand-new team directly. Unlike POST /api/teams (which requires a coach's
+   * own TeamSync login and auto-enrolls them as its coach), this is
+    * shared-secret authenticated so an admin can create a team on someone
+     * else's behalf, then assign a coach to it separately via
+      * applyWordpressCoachTeamAssignment above.
+       */
+async function applyWordpressCreateTeam({ name, sport, season }) {
+    if (!name) throw new Error("name is required");
+    if (!sport) throw new Error("sport is required");
+  
+    const team = await prisma.team.create({
+          data: { name, sport, season: season || null },
+    });
+  
+    return { teamId: team.id, teamName: team.name, sport: team.sport, season: team.season };
+}
+
+/**
  * The reverse direction: called after a coach adds/removes a player from a
  * team inside the TeamSync app itself, to push that player's full current
  * team list back to WordPress so pp_team_ids stays accurate there too.
@@ -92,4 +153,4 @@ async function pushTeamAssignmentToWordpress(wpPlayerId) {
   }
 }
 
-module.exports = { applyWordpressTeamAssignment, pushTeamAssignmentToWordpress };
+module.exports = { applyWordpressTeamAssignment, applyWordpressCoachTeamAssignment, applyWordpressCreateTeam, pushTeamAssignmentToWordpress };
