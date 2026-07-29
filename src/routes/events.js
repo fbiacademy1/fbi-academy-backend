@@ -1,6 +1,6 @@
 const express = require("express");
-const prisma = require("../db");
 const crypto = require("crypto");
+const prisma = require("../db");
 const { requireAuth, requireTeamMembership, requireRole } = require("../middleware/auth");
 const asyncHandler = require("../middleware/asyncHandler");
 
@@ -54,8 +54,12 @@ router.get("/:id", asyncHandler(async (req, res) => {
 // For matches, `homeAway` ("home" | "away") is optional alongside `opponent`.
 // When set, the team's default uniform colors (see Team Settings) are
 // snapshotted onto jerseyColor/shortsColor/socksColor at creation time.
+//
+// `repeatEndDate`, if given alongside `repeat`, stops generating occurrences
+// once an occurrence's start time would fall after it - an early cutoff on
+// top of (never beyond) the REPEAT_OCCURRENCES cap below.
 router.post("/", requireRole("admin", "coach"), asyncHandler(async (req, res) => {
-  const { type, title, location, startTime, endTime, notes, repeat, opponent, homeAway } = req.body;
+  const { type, title, location, startTime, endTime, notes, repeat, repeatEndDate, opponent, homeAway } = req.body;
   if (!type || !title || !startTime) {
     return res.status(400).json({ error: "type, title, and startTime are required" });
   }
@@ -70,6 +74,7 @@ router.post("/", requireRole("admin", "coach"), asyncHandler(async (req, res) =>
   const baseEnd = endTime ? new Date(endTime) : null;
   const occurrenceCount = repeat ? REPEAT_OCCURRENCES[repeat] : 1;
   const recurringId = repeat ? crypto.randomUUID() : null;
+  const repeatEnd = repeat && repeatEndDate ? new Date(repeatEndDate) : null;
 
   let jerseyColor = null;
   let shortsColor = null;
@@ -91,13 +96,15 @@ router.post("/", requireRole("admin", "coach"), asyncHandler(async (req, res) =>
 
   const createdEvents = [];
   for (let i = 0; i < occurrenceCount; i++) {
+    const occStart = repeat ? addRepeatOffset(baseStart, repeat, i) : baseStart;
+    if (repeatEnd && occStart > repeatEnd) break;
     const event = await prisma.event.create({
       data: {
         teamId: req.membership.teamId,
         type,
         title,
         location,
-        startTime: repeat ? addRepeatOffset(baseStart, repeat, i) : baseStart,
+        startTime: occStart,
         endTime: baseEnd ? (repeat ? addRepeatOffset(baseEnd, repeat, i) : baseEnd) : null,
         notes,
         repeatFreq: repeat || null,
