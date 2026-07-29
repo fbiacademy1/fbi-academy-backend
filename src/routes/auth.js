@@ -13,6 +13,7 @@ async function membershipsFor(userId) {
     include: { team: true },
   });
   return memberships.map((m) => ({
+    id: m.id,
     teamId: m.teamId,
     teamName: m.team.name,
     sport: m.team.sport,
