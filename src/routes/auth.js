@@ -81,4 +81,15 @@ router.get("/me", requireAuth, asyncHandler(async (req, res) => {
   res.json({ user: { id: user.id, email: user.email }, memberships });
 }));
 
+// POST /api/auth/push-token - registers this device's Expo push token
+// against the logged-in user, so "Notify Team" event notifications can
+// reach them. Overwrites any previous token for this user (simple 1
+// device/user model). Called from the app right after login/launch.
+router.post("/push-token", requireAuth, asyncHandler(async (req, res) => {
+  const { pushToken } = req.body;
+  if (!pushToken) return res.status(400).json({ error: "pushToken is required" });
+  await prisma.user.update({ where: { id: req.user.userId }, data: { pushToken } });
+  res.json({ ok: true });
+}));
+
 module.exports = router;
