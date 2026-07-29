@@ -78,6 +78,8 @@ model Membership {
   player    Player?  @relation(fields: [playerId], references: [id])
   createdAt DateTime @default(now())
   volunteerRoles VolunteerRole[]
+  // Coach/admin RSVPs (players RSVP via Player/playerId instead - see RSVP model).
+  rsvps          RSVP[]
 
   @@unique([userId, teamId])
 }
@@ -223,16 +225,24 @@ model VolunteerRole {
   @@index([eventId])
 }
 
+// A player's RSVP is keyed by playerId (seeded for every roster player when
+// an event is created, so "Team availability" always has a full list).
+// A coach/admin isn't a roster player, so their RSVP - added lazily, only
+// once they actually respond - is keyed by membershipId instead. Exactly
+// one of playerId/membershipId is set per row.
 model RSVP {
-  id          String    @id @default(cuid())
-  eventId     String
-  event       Event     @relation(fields: [eventId], references: [id])
-  playerId    String
-  player      Player    @relation(fields: [playerId], references: [id])
-  status      String    @default("no_response") // "yes" | "no" | "maybe" | "no_response"
-  respondedAt DateTime?
+  id            String      @id @default(cuid())
+  eventId       String
+  event         Event       @relation(fields: [eventId], references: [id])
+  playerId      String?
+  player        Player?     @relation(fields: [playerId], references: [id])
+  membershipId  String?
+  membership    Membership? @relation(fields: [membershipId], references: [id])
+  status        String      @default("no_response") // "yes" | "no" | "maybe" | "no_response"
+  respondedAt   DateTime?
 
   @@unique([eventId, playerId])
+  @@unique([eventId, membershipId])
 }
 
 // Team-wide chat / announcements (broadcast to everyone on the team).
