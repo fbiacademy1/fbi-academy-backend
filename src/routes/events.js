@@ -12,18 +12,18 @@ router.use(requireAuth, requireTeamMembership);
 // a coach can always add more by creating the event again once these run out.
 const REPEAT_OCCURRENCES = { daily: 30, weekly: 12, monthly: 6 };
 const REPEAT_STEP_MS = {
-    daily: 24 * 60 * 60 * 1000,
-    weekly: 7 * 24 * 60 * 60 * 1000,
-    // Monthly is handled separately (calendar months, not a fixed ms step)
+  daily: 24 * 60 * 60 * 1000,
+  weekly: 7 * 24 * 60 * 60 * 1000,
+  // Monthly is handled separately (calendar months, not a fixed ms step)
 };
 
 function addRepeatOffset(date, freq, occurrenceIndex) {
-    if (freq === "monthly") {
-          const d = new Date(date);
-          d.setMonth(d.getMonth() + occurrenceIndex);
-          return d;
-    }
-    return new Date(date.getTime() + REPEAT_STEP_MS[freq] * occurrenceIndex);
+  if (freq === "monthly") {
+    const d = new Date(date);
+    d.setMonth(d.getMonth() + occurrenceIndex);
+    return d;
+  }
+  return new Date(date.getTime() + REPEAT_STEP_MS[freq] * occurrenceIndex);
 }
 
 // GET /api/events  -> schedule (games, practices, team functions) for the current team
@@ -46,57 +46,111 @@ router.get("/:id", asyncHandler(async (req, res) => {
 }));
 
 // POST /api/events  (admin/coach only) - creates a game/practice/team function
-// and a pending RSVP row for every player currently on the roster
+// and a pending RSVP row for every player currently on the roster. If
+// `repeat` is "daily" | "weekly" | "monthly", generates a fixed number of
+// future occurrences (see REPEAT_OCCURRENCES) instead of just one, all
+// sharing a recurringId and each getting its own RSVP rows.
+//
+// For matches, `homeAway` ("home" | "away") is optional alongside `opponent`.
+// When set, the team's default uniform colors (see Team Settings) are
+// snapshotted onto jerseyColor/shortsColor/socksColor at creation time.
 router.post("/", requireRole("admin", "coach"), asyncHandler(async (req, res) => {
-  const { type, title, location, startTime, endTime, notes, repeat } = req.body;
-    if (!type || !title || !startTime) {
-          return res.status(400).json({ error: "type, title, and startTime are required" });
+  const { type, title, location, startTime, endTime, notes, repeat, opponent, homeAway } = req.body;
+  if (!type || !title || !startTime) {
+    return res.status(400).json({ error: "type, title, and startTime are required" });
+  }
+  if (repeat && !REPEAT_OCCURRENCES[repeat]) {
+    return res.status(400).json({ error: "repeat must be one of: daily, weekly, monthly" });
+  }
+  if (homeAway && !["home", "away"].includes(homeAway)) {
+    return res.status(400).json({ error: "homeAway must be 'home' or 'away'" });
+  }
+
+  const baseStart = new Date(startTime);
+  const baseEnd = endTime ? new Date(endTime) : null;
+  const occurrenceCount = repeat ? REPEAT_OCCURRENCES[repeat] : 1;
+  const recurringId = repeat ? crypto.randomUUID() : null;
+
+  let jerseyColor = null;
+  let shortsColor = null;
+  let socksColor = null;
+  if (homeAway) {
+    const team = await prisma.team.findUnique({ where: { id: req.membership.teamId } });
+    if (homeAway === "home") {
+      jerseyColor = team?.homeJerseyColor || null;
+      shortsColor = team?.homeShortsColor || null;
+      socksColor = team?.homeSocksColor || null;
+    } else {
+      jerseyColor = team?.awayJerseyColor || null;
+      shortsColor = team?.awayShortsColor || null;
+      socksColor = team?.awaySocksColor || null;
     }
-    if (repeat && !REPEAT_OCCURRENCES[repeat]) {
-          return res.status(400).json({ error: "repeat must be one of: daily, weekly, monthly" });
+  }
+
+  const players = await prisma.player.findMany({ where: { teamId: req.membership.teamId } });
+
+  const createdEvents = [];
+  for (let i = 0; i < occurrenceCount; i++) {
+    const event = await prisma.event.create({
+      data: {
+        teamId: req.membership.teamId,
+        type,
+        title,
+        location,
+        startTime: repeat ? addRepeatOffset(baseStart, repeat, i) : baseStart,
+        endTime: baseEnd ? (repeat ? addRepeatOffset(baseEnd, repeat, i) : baseEnd) : null,
+        notes,
+        repeatFreq: repeat || null,
+        recurringId,
+        opponent: opponent || null,
+        homeAway: homeAway || null,
+        jerseyColor,
+        shortsColor,
+        socksColor,
+      },
+    });
+    if (players.length > 0) {
+      await prisma.rSVP.createMany({
+        data: players.map((p) => ({ eventId: event.id, playerId: p.id })),
+      });
     }
+    createdEvents.push(event);
+  }
 
-    const baseStart = new Date(startTime);
-    const baseEnd = endTime ? new Date(endTime) : null;
-    const occurrenceCount = repeat ? REPEAT_OCCURRENCES[repeat] : 1;
-    const recurringId = repeat ? crypto.randomUUID() : null;
-
-    const players = await prisma.player.findMany({ where: { teamId: req.membership.teamId } });
-
-    const createdEvents = [];
-    for (let i = 0; i < occurrenceCount; i++) {
-          const event = await prisma.event.create({
-                  data: {
-                            teamId: req.membership.teamId,
-                            type,
-                            title,
-                            location,
-                            startTime: repeat ? addRepeatOffset(baseStart, repeat, i) : baseStart,
-                            endTime: baseEnd ? (repeat ? addRepeatOffset(baseEnd, repeat, i) : baseEnd) : null,
-                            notes,
-                            repeatFreq: repeat || null,
-                            recurringId,
-                  },
-          });
-          if (players.length > 0) {
-                  await prisma.rSVP.createMany({
-                            data: players.map((p) => ({ eventId: event.id, playerId: p.id })),
-                  });
-          }
-          createdEvents.push(event);
-    }
-
-    res.status(201).json(repeat ? { events: createdEvents, count: createdEvents.length } : createdEvents[0]);
+  res.status(201).json(repeat ? { events: createdEvents, count: createdEvents.length } : createdEvents[0]);
 }));
 
 router.put("/:id", requireRole("admin", "coach"), asyncHandler(async (req, res) => {
   const event = await prisma.event.findUnique({ where: { id: req.params.id } });
   if (!event || event.teamId !== req.membership.teamId) return res.status(404).json({ error: "Event not found" });
 
-  const { type, title, location, startTime, endTime, notes } = req.body;
+  const { type, title, location, startTime, endTime, notes, opponent, homeAway } = req.body;
+  if (homeAway && !["home", "away"].includes(homeAway)) {
+    return res.status(400).json({ error: "homeAway must be 'home' or 'away'" });
+  }
+
+  let uniformUpdate = {};
+  if (homeAway && homeAway !== event.homeAway) {
+    const team = await prisma.team.findUnique({ where: { id: req.membership.teamId } });
+    uniformUpdate =
+      homeAway === "home"
+        ? { jerseyColor: team?.homeJerseyColor || null, shortsColor: team?.homeShortsColor || null, socksColor: team?.homeSocksColor || null }
+        : { jerseyColor: team?.awayJerseyColor || null, shortsColor: team?.awayShortsColor || null, socksColor: team?.awaySocksColor || null };
+  }
+
   const updated = await prisma.event.update({
     where: { id: event.id },
-    data: { type, title, location, startTime: startTime ? new Date(startTime) : undefined, endTime: endTime ? new Date(endTime) : undefined, notes },
+    data: {
+      type,
+      title,
+      location,
+      startTime: startTime ? new Date(startTime) : undefined,
+      endTime: endTime ? new Date(endTime) : undefined,
+      notes,
+      opponent: opponent !== undefined ? opponent || null : undefined,
+      homeAway: homeAway !== undefined ? homeAway || null : undefined,
+      ...uniformUpdate,
+    },
   });
   res.json(updated);
 }));
