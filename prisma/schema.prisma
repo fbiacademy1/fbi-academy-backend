@@ -53,6 +53,10 @@ model User {
   passwordHash String?
   wpUserId     Int?     @unique
   createdAt    DateTime @default(now())
+  // Expo push token for this user's device, used to send "Notify Team"
+  // event-created notifications. Overwritten on each login - simple 1
+  // device/user model rather than a full multi-device token table.
+  pushToken    String?
 
   memberships             Membership[]
   sentDirectMessages      DirectMessage[] @relation("SentMessages")
@@ -73,6 +77,7 @@ model Membership {
   playerId  String?  @unique
   player    Player?  @relation(fields: [playerId], references: [id])
   createdAt DateTime @default(now())
+  volunteerRoles VolunteerRole[]
 
   @@unique([userId, teamId])
 }
@@ -184,10 +189,38 @@ model Event {
   jerseyColor   String?
   shortsColor   String?
   socksColor    String?
+  // Extra scheduling/organizational fields (mirrors common team-app features).
+  locationDetails    String?  // e.g. "Field #5"
+  timeTbd            Boolean  @default(false) // when true, startTime is a placeholder and the UI shows "Time TBD"
+  arriveEarlyMinutes Int?     // reminder buffer, e.g. 15 = "arrive 15 min before start"
+  extraLabel         String?  // short freeform subtitle shown under the title
+  flagColor          String?  // hex code from a fixed preset palette (color-codes the event, distinct from match uniform colors)
+  trackAvailability  Boolean  @default(true) // when false, no RSVP rows are created/tracked for this event
+  notForStandings    Boolean  @default(false) // game-only: a scrimmage/friendly that doesn't count toward win/loss record
+  canceled           Boolean  @default(false) // marks the event canceled without deleting it (keeps history/RSVPs)
+  notifyTeam         Boolean  @default(false) // whether a push notification was sent to the team when this event was created
   createdAt DateTime @default(now())
-  rsvps     RSVP[]
+  rsvps          RSVP[]
+  volunteerRoles VolunteerRole[]
 
   @@index([recurringId])
+}
+
+// A volunteer slot for an event (e.g. "Snacks", "Equipment", "Photos"). A
+// coach creates the slot with a title; it can optionally be assigned to a
+// specific roster member (player's parent, in practice). Managed from the
+// event detail screen once the event exists.
+model VolunteerRole {
+  id                 String      @id @default(cuid())
+  eventId            String
+  event              Event       @relation(fields: [eventId], references: [id])
+  title              String
+  assignedMembershipId String?
+  assignedMembership Membership? @relation(fields: [assignedMembershipId], references: [id])
+  notes              String?
+  createdAt          DateTime    @default(now())
+
+  @@index([eventId])
 }
 
 model RSVP {
