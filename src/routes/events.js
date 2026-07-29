@@ -3,6 +3,9 @@ const crypto = require("crypto");
 const prisma = require("../db");
 const { requireAuth, requireTeamMembership, requireRole } = require("../middleware/auth");
 const asyncHandler = require("../middleware/asyncHandler");
+const { sendTeamNotification } = require("../services/pushNotifications");
+
+const TYPE_LABELS = { game: "Match", practice: "Training", event: "Team Function" };
 
 const router = express.Router();
 router.use(requireAuth, requireTeamMembership);
@@ -59,7 +62,10 @@ router.get("/:id", asyncHandler(async (req, res) => {
 // once an occurrence's start time would fall after it - an early cutoff on
 // top of (never beyond) the REPEAT_OCCURRENCES cap below.
 router.post("/", requireRole("admin", "coach"), asyncHandler(async (req, res) => {
-  const { type, title, location, startTime, endTime, notes, repeat, repeatEndDate, opponent, homeAway } = req.body;
+  const {
+    type, title, location, startTime, endTime, notes, repeat, repeatEndDate, opponent, homeAway,
+    locationDetails, timeTbd, arriveEarlyMinutes, extraLabel, flagColor, trackAvailability, notForStandings, notifyTeam,
+  } = req.body;
   if (!type || !title || !startTime) {
     return res.status(400).json({ error: "type, title, and startTime are required" });
   }
@@ -93,6 +99,7 @@ router.post("/", requireRole("admin", "coach"), asyncHandler(async (req, res) =>
   }
 
   const players = await prisma.player.findMany({ where: { teamId: req.membership.teamId } });
+  const shouldTrack = trackAvailability !== false; // defaults to true
 
   const createdEvents = [];
   for (let i = 0; i < occurrenceCount; i++) {
@@ -114,14 +121,39 @@ router.post("/", requireRole("admin", "coach"), asyncHandler(async (req, res) =>
         jerseyColor,
         shortsColor,
         socksColor,
+        locationDetails: locationDetails || null,
+        timeTbd: !!timeTbd,
+        arriveEarlyMinutes: arriveEarlyMinutes || null,
+        extraLabel: extraLabel || null,
+        flagColor: flagColor || null,
+        trackAvailability: shouldTrack,
+        notForStandings: !!notForStandings,
+        notifyTeam: !!notifyTeam,
       },
     });
-    if (players.length > 0) {
+    if (shouldTrack && players.length > 0) {
       await prisma.rSVP.createMany({
         data: players.map((p) => ({ eventId: event.id, playerId: p.id })),
       });
     }
     createdEvents.push(event);
+  }
+
+  if (notifyTeam && createdEvents.length > 0) {
+    const first = createdEvents[0];
+    const typeLabel = TYPE_LABELS[type] || type;
+    const when = first.startTime.toLocaleString
+      ? first.startTime.toLocaleString("en-US", { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })
+      : new Date(first.startTime).toLocaleString();
+    sendTeamNotification(
+      req.membership.teamId,
+      {
+        title: `New ${typeLabel}: ${title}`,
+        body: repeat ? `Starts ${when} - repeats ${repeat}` : `${when}${location ? ` - ${location}` : ""}`,
+        data: { eventId: first.id },
+      },
+      req.user.userId
+    );
   }
 
   res.status(201).json(repeat ? { events: createdEvents, count: createdEvents.length } : createdEvents[0]);
@@ -131,7 +163,10 @@ router.put("/:id", requireRole("admin", "coach"), asyncHandler(async (req, res) 
   const event = await prisma.event.findUnique({ where: { id: req.params.id } });
   if (!event || event.teamId !== req.membership.teamId) return res.status(404).json({ error: "Event not found" });
 
-  const { type, title, location, startTime, endTime, notes, opponent, homeAway } = req.body;
+  const {
+    type, title, location, startTime, endTime, notes, opponent, homeAway,
+    locationDetails, timeTbd, arriveEarlyMinutes, extraLabel, flagColor, trackAvailability, notForStandings, canceled,
+  } = req.body;
   if (homeAway && !["home", "away"].includes(homeAway)) {
     return res.status(400).json({ error: "homeAway must be 'home' or 'away'" });
   }
@@ -156,6 +191,14 @@ router.put("/:id", requireRole("admin", "coach"), asyncHandler(async (req, res) 
       notes,
       opponent: opponent !== undefined ? opponent || null : undefined,
       homeAway: homeAway !== undefined ? homeAway || null : undefined,
+      locationDetails: locationDetails !== undefined ? locationDetails || null : undefined,
+      timeTbd: timeTbd !== undefined ? !!timeTbd : undefined,
+      arriveEarlyMinutes: arriveEarlyMinutes !== undefined ? arriveEarlyMinutes || null : undefined,
+      extraLabel: extraLabel !== undefined ? extraLabel || null : undefined,
+      flagColor: flagColor !== undefined ? flagColor || null : undefined,
+      trackAvailability: trackAvailability !== undefined ? !!trackAvailability : undefined,
+      notForStandings: notForStandings !== undefined ? !!notForStandings : undefined,
+      canceled: canceled !== undefined ? !!canceled : undefined,
       ...uniformUpdate,
     },
   });
@@ -166,6 +209,64 @@ router.delete("/:id", requireRole("admin", "coach"), asyncHandler(async (req, re
   const event = await prisma.event.findUnique({ where: { id: req.params.id } });
   if (!event || event.teamId !== req.membership.teamId) return res.status(404).json({ error: "Event not found" });
   await prisma.event.delete({ where: { id: event.id } });
+  res.status(204).end();
+}));
+
+// --- Volunteer Assignments ---
+// A coach defines volunteer role slots for an event (e.g. "Snacks",
+// "Equipment") and can optionally assign each to a roster member. Managed
+// after the event exists (not during creation) - simplest flow, and avoids
+// needing an eventId before the event is actually saved.
+
+// GET /api/events/:eventId/volunteers - any team member can view assignments
+router.get("/:eventId/volunteers", asyncHandler(async (req, res) => {
+  const event = await prisma.event.findUnique({ where: { id: req.params.eventId } });
+  if (!event || event.teamId !== req.membership.teamId) return res.status(404).json({ error: "Event not found" });
+
+  const roles = await prisma.volunteerRole.findMany({
+    where: { eventId: event.id },
+    include: { assignedMembership: { include: { player: true, user: true } } },
+    orderBy: { createdAt: "asc" },
+  });
+  res.json(roles);
+}));
+
+// POST /api/events/:eventId/volunteers  (admin/coach only) - add a role slot
+router.post("/:eventId/volunteers", requireRole("admin", "coach"), asyncHandler(async (req, res) => {
+  const event = await prisma.event.findUnique({ where: { id: req.params.eventId } });
+  if (!event || event.teamId !== req.membership.teamId) return res.status(404).json({ error: "Event not found" });
+
+  const { title, assignedMembershipId, notes } = req.body;
+  if (!title) return res.status(400).json({ error: "title is required" });
+
+  const role = await prisma.volunteerRole.create({
+    data: { eventId: event.id, title, assignedMembershipId: assignedMembershipId || null, notes: notes || null },
+  });
+  res.status(201).json(role);
+}));
+
+// PUT /api/events/volunteer-roles/:id  (admin/coach only) - edit or (re)assign a role slot
+router.put("/volunteer-roles/:id", requireRole("admin", "coach"), asyncHandler(async (req, res) => {
+  const role = await prisma.volunteerRole.findUnique({ where: { id: req.params.id }, include: { event: true } });
+  if (!role || role.event.teamId !== req.membership.teamId) return res.status(404).json({ error: "Volunteer role not found" });
+
+  const { title, assignedMembershipId, notes } = req.body;
+  const updated = await prisma.volunteerRole.update({
+    where: { id: role.id },
+    data: {
+      title: title !== undefined ? title : undefined,
+      assignedMembershipId: assignedMembershipId !== undefined ? assignedMembershipId || null : undefined,
+      notes: notes !== undefined ? notes || null : undefined,
+    },
+  });
+  res.json(updated);
+}));
+
+// DELETE /api/events/volunteer-roles/:id  (admin/coach only)
+router.delete("/volunteer-roles/:id", requireRole("admin", "coach"), asyncHandler(async (req, res) => {
+  const role = await prisma.volunteerRole.findUnique({ where: { id: req.params.id }, include: { event: true } });
+  if (!role || role.event.teamId !== req.membership.teamId) return res.status(404).json({ error: "Volunteer role not found" });
+  await prisma.volunteerRole.delete({ where: { id: role.id } });
   res.status(204).end();
 }));
 
