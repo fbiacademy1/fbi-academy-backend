@@ -21,6 +21,15 @@ model Team {
   sport     String
   season    String?
   createdAt DateTime  @default(now())
+  // Default match-day uniform colors, set by a coach/admin in Team Settings.
+  // Copied onto an Event's jerseyColor/shortsColor/socksColor when a match
+  // is created with a Home or Away designation.
+  homeJerseyColor String?
+  homeShortsColor String?
+  homeSocksColor  String?
+  awayJerseyColor String?
+  awayShortsColor String?
+  awaySocksColor  String?
   memberships    Membership[]
   players        Player[]
   events         Event[]
@@ -157,9 +166,28 @@ model Event {
   startTime DateTime
   endTime   DateTime?
   notes     String?
+  // Recurrence: when a coach creates a recurring match/training/team
+  // function, one Event row is created per occurrence (simpler to query/
+  // RSVP against than an RRULE), all sharing the same recurringId so they
+  // can be identified as one series later if needed. repeatFreq is only
+  // set on rows created via the repeat flow; a normal one-off event has
+  // both fields null.
+  repeatFreq   String? // "daily" | "weekly" | "monthly"
+  recurringId  String?
+  // Match-only fields (type === "game"). homeAway drives which of the
+  // team's default uniform colors get copied onto jersey/shorts/socks
+  // color at creation time - stored on the event itself (not looked up
+  // live from Team) so a match's recorded uniform stays accurate even if
+  // the team's default colors are changed later.
+  opponent      String?
+  homeAway      String? // "home" | "away"
+  jerseyColor   String?
+  shortsColor   String?
+  socksColor    String?
   createdAt DateTime @default(now())
   rsvps     RSVP[]
 
+  @@index([recurringId])
 }
 
 model RSVP {
