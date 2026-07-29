@@ -28,10 +28,16 @@ router.get("/", asyncHandler(async (req, res) => {
   const players = await prisma.player.findMany({
     where: { teamId: req.membership.teamId },
     orderBy: [{ lastName: "asc" }],
+    // membershipId is only needed by staff (e.g. to assign a Volunteer Role
+    // to a player/parent's membership) - included here rather than a
+    // separate endpoint since the roster list is already fetched anyway.
+    include: { membership: { select: { id: true } } },
   });
 
   const isStaff = ["admin", "coach"].includes(req.membership.role);
-  if (isStaff) return res.json(players);
+  if (isStaff) {
+    return res.json(players.map(({ membership, ...p }) => ({ ...p, membershipId: membership?.id || null })));
+  }
 
   const trimmed = players.map((p) =>
     p.id === req.membership.playerId ? p : pick(p, TEAMMATE_VIEW_FIELDS)
