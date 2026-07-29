@@ -42,7 +42,7 @@ router.get("/", asyncHandler(async (req, res) => {
 router.get("/:id", asyncHandler(async (req, res) => {
   const event = await prisma.event.findUnique({
     where: { id: req.params.id },
-    include: { rsvps: { include: { player: true } } },
+    include: { rsvps: { include: { player: true, membership: { include: { user: true } } } } },
   });
   if (!event || event.teamId !== req.membership.teamId) return res.status(404).json({ error: "Event not found" });
   res.json(event);
