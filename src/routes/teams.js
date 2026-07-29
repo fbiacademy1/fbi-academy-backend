@@ -20,8 +20,40 @@ router.get("/", asyncHandler(async (req, res) => {
       season: m.team.season,
       role: m.role,
       playerId: m.playerId,
+      homeJerseyColor: m.team.homeJerseyColor,
+      homeShortsColor: m.team.homeShortsColor,
+      homeSocksColor: m.team.homeSocksColor,
+      awayJerseyColor: m.team.awayJerseyColor,
+      awayShortsColor: m.team.awayShortsColor,
+      awaySocksColor: m.team.awaySocksColor,
     }))
   );
+}));
+
+// PUT /api/teams/:id/uniforms - sets default home/away jersey, shorts, and
+// socks colors used to auto-populate new matches. Admin/coach on this team only.
+router.put("/:id/uniforms", asyncHandler(async (req, res) => {
+  const teamId = req.params.id;
+  const membership = await prisma.membership.findUnique({
+    where: { userId_teamId: { userId: req.user.userId, teamId } },
+  });
+  if (!membership || !["admin", "coach"].includes(membership.role)) {
+    return res.status(403).json({ error: "Only a coach/admin on this team can edit uniform colors" });
+  }
+
+  const { homeJerseyColor, homeShortsColor, homeSocksColor, awayJerseyColor, awayShortsColor, awaySocksColor } = req.body;
+  const team = await prisma.team.update({
+    where: { id: teamId },
+    data: {
+      homeJerseyColor: homeJerseyColor ?? null,
+      homeShortsColor: homeShortsColor ?? null,
+      homeSocksColor: homeSocksColor ?? null,
+      awayJerseyColor: awayJerseyColor ?? null,
+      awayShortsColor: awayShortsColor ?? null,
+      awaySocksColor: awaySocksColor ?? null,
+    },
+  });
+  res.json(team);
 }));
 
 // POST /api/teams - create a new team; the creator becomes its coach
