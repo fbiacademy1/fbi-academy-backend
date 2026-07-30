@@ -19,6 +19,12 @@ async function membershipsFor(userId) {
     sport: m.team.sport,
     role: m.role,
     playerId: m.playerId,
+    homeJerseyColor: m.team.homeJerseyColor,
+    homeShortsColor: m.team.homeShortsColor,
+    homeSocksColor: m.team.homeSocksColor,
+    awayJerseyColor: m.team.awayJerseyColor,
+    awayShortsColor: m.team.awayShortsColor,
+    awaySocksColor: m.team.awaySocksColor,
   }));
 }
 

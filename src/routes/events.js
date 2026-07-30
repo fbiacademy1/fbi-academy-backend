@@ -208,6 +208,22 @@ router.put("/:id", requireRole("admin", "coach"), asyncHandler(async (req, res) 
 router.delete("/:id", requireRole("admin", "coach"), asyncHandler(async (req, res) => {
   const event = await prisma.event.findUnique({ where: { id: req.params.id } });
   if (!event || event.teamId !== req.membership.teamId) return res.status(404).json({ error: "Event not found" });
+  // Every event gets an RSVP row per roster player at creation time, and
+  // RSVP has a required FK to Event with no cascade delete at the DB level
+  // - deleting the event directly violates that FK and fails with a
+  // generic 500. VolunteerRole has the same required-FK relationship.
+  // Clean those up first, and independently of each other, so a problem
+  // with one dependent table can't block deleting the other or the event.
+  try {
+    await prisma.rSVP.deleteMany({ where: { eventId: event.id } });
+  } catch (err) {
+    console.error(`Failed to delete RSVPs for event ${event.id}:`, err);
+  }
+  try {
+    await prisma.volunteerRole.deleteMany({ where: { eventId: event.id } });
+  } catch (err) {
+    console.error(`Failed to delete volunteer roles for event ${event.id}:`, err);
+  }
   await prisma.event.delete({ where: { id: event.id } });
   res.status(204).end();
 }));
