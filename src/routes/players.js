@@ -145,7 +145,7 @@ router.put("/:id", asyncHandler(async (req, res) => {
 
   const {
     firstName, lastName, email, phone, jerseyNumber, position,
-    birthdate, photoUrl, favoritePlayerPhotoUrl, guardianName, emergencyContact, notes,
+    birthdate, photoUrl, favoritePlayerPhotoUrl, guardianName, guardianPhone, guardianEmail, emergencyContact, notes,
   } = req.body;
 
   const updated = await prisma.player.update({
@@ -153,7 +153,7 @@ router.put("/:id", asyncHandler(async (req, res) => {
     data: {
       firstName, lastName, email, phone, jerseyNumber, position,
       birthdate: birthdate ? new Date(birthdate) : undefined,
-      photoUrl, favoritePlayerPhotoUrl, guardianName, emergencyContact, notes,
+      photoUrl, favoritePlayerPhotoUrl, guardianName, guardianPhone, guardianEmail, emergencyContact, notes,
       syncStatus: "pending",
     },
   });

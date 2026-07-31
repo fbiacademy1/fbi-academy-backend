@@ -4,6 +4,7 @@ const prisma = require("../db");
 const { requireAuth, requireTeamMembership, requireRole } = require("../middleware/auth");
 const asyncHandler = require("../middleware/asyncHandler");
 const { sendTeamNotification } = require("../services/pushNotifications");
+const { notifyEventToFamilies } = require("../services/outboundNotifications");
 
 const TYPE_LABELS = { game: "Match", practice: "Training", event: "Team Function" };
 
@@ -145,15 +146,20 @@ router.post("/", requireRole("admin", "coach"), asyncHandler(async (req, res) =>
     const when = first.startTime.toLocaleString
       ? first.startTime.toLocaleString("en-US", { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })
       : new Date(first.startTime).toLocaleString();
+    const bodyText = repeat ? `Starts ${when} - repeats ${repeat}` : `${when}${location ? ` - ${location}` : ""}`;
     sendTeamNotification(
       req.membership.teamId,
       {
         title: `New ${typeLabel}: ${title}`,
-        body: repeat ? `Starts ${when} - repeats ${repeat}` : `${when}${location ? ` - ${location}` : ""}`,
+        body: bodyText,
         data: { eventId: first.id },
       },
       req.user.userId
     );
+    notifyEventToFamilies(players, {
+      subject: `New ${typeLabel}: ${title}`,
+      body: `New ${typeLabel}: ${title}\n${bodyText}`,
+    });
   }
 
   res.status(201).json(repeat ? { events: createdEvents, count: createdEvents.length } : createdEvents[0]);
@@ -166,6 +172,7 @@ router.put("/:id", requireRole("admin", "coach"), asyncHandler(async (req, res) 
   const {
     type, title, location, startTime, endTime, notes, opponent, homeAway,
     locationDetails, timeTbd, arriveEarlyMinutes, extraLabel, flagColor, trackAvailability, notForStandings, canceled,
+    notifyTeam,
   } = req.body;
   if (homeAway && !["home", "away"].includes(homeAway)) {
     return res.status(400).json({ error: "homeAway must be 'home' or 'away'" });
@@ -202,6 +209,29 @@ router.put("/:id", requireRole("admin", "coach"), asyncHandler(async (req, res) 
       ...uniformUpdate,
     },
   });
+
+  if (notifyTeam) {
+    const typeLabel = TYPE_LABELS[updated.type] || updated.type;
+    const when = updated.startTime.toLocaleString
+      ? updated.startTime.toLocaleString("en-US", { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })
+      : new Date(updated.startTime).toLocaleString();
+    const bodyText = `${when}${updated.location ? ` - ${updated.location}` : ""}${canceled ? " (CANCELED)" : ""}`;
+    sendTeamNotification(
+      req.membership.teamId,
+      {
+        title: `Updated ${typeLabel}: ${updated.title}`,
+        body: bodyText,
+        data: { eventId: updated.id },
+      },
+      req.user.userId
+    );
+    const players = await prisma.player.findMany({ where: { teamId: req.membership.teamId } });
+    notifyEventToFamilies(players, {
+      subject: `Updated ${typeLabel}: ${updated.title}`,
+      body: `Updated ${typeLabel}: ${updated.title}\n${bodyText}`,
+    });
+  }
+
   res.json(updated);
 }));
 

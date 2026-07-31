@@ -11,6 +11,7 @@ const messageRoutes = require("./routes/messages");
 const directMessageRoutes = require("./routes/directMessages");
 const syncRoutes = require("./routes/sync");
 const uploadRoutes = require("./routes/uploads");
+const trainingSessionRoutes = require("./routes/trainingSessions");
 
 const app = express();
 app.use(cors());
@@ -37,6 +38,7 @@ app.use("/api/messages", messageRoutes);
 app.use("/api/direct-messages", directMessageRoutes);
 app.use("/api/sync", syncRoutes);
 app.use("/api/uploads", uploadRoutes);
+app.use("/api/training-sessions", trainingSessionRoutes);
 
 // Centralized error handler
 app.use((err, req, res, next) => {

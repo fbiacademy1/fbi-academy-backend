@@ -98,6 +98,8 @@ model Player {
   photoUrl              String?
   favoritePlayerPhotoUrl String?
   guardianName          String?
+  guardianPhone         String?
+  guardianEmail         String?
   emergencyContact      String?
   notes                 String?
 
