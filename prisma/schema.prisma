@@ -35,6 +35,7 @@ model Team {
   events         Event[]
   messages       Message[]
   directMessages DirectMessage[]
+  trainingVideos TrainingVideo[]
 
 }
 
@@ -102,6 +103,10 @@ model Player {
   guardianEmail         String?
   emergencyContact      String?
   notes                 String?
+  // Player/guardian opt-in for the team-scoped training leaderboard (see
+  // LeaderboardScreen). Off by default - a coach or teammate never sees a
+  // player ranked unless this is explicitly turned on from their own profile.
+  leaderboardOptIn      Boolean   @default(false)
 
   // --- WordPress sync fields ---
   wordpressPostId  Int?
@@ -120,6 +125,8 @@ model Player {
   messages    Message[]
   videos      PlayerVideo[]
   evaluations PlayerEvaluation[]
+  trainingLogs PlayerTrainingLog[]
+  skillTests  PlayerSkillTest[]
 
   @@index([wordpressPostId])
   @@index([wpPlayerId])
@@ -136,7 +143,89 @@ model PlayerVideo {
   url       String
   position  Int      @default(0)
   createdAt DateTime @default(now())
+  trainingLogs PlayerTrainingLog[]
 
+}
+
+// Player-logged practice time (Techne-style: captured via an in-app
+// start/stop timer rather than typed in, so the numbers driving the
+// streak/total-time stats on the profile are trustworthy). Optionally
+// tied to a specific PlayerVideo if the player was training against a
+// drill link rather than a general session. onDelete: Cascade on the
+// player relation means a log never outlives its player; onDelete:
+// SetNull on the video relation means a WordPress video resync (which
+// deletes and recreates PlayerVideo rows) can never break an existing log
+// - it just loses that back-reference.
+model PlayerTrainingLog {
+  id        String       @id @default(cuid())
+  playerId  String
+  player    Player       @relation(fields: [playerId], references: [id], onDelete: Cascade)
+  // Two separate optional back-references, deliberately not one polymorphic
+  // FK: videoId points at a player's own WordPress-sourced profile video,
+  // trainingVideoId points at an entry in the shared, coach-uploaded weekly
+  // TrainingVideo library. A session is tied to at most one of the two.
+  videoId   String?
+  video     PlayerVideo? @relation(fields: [videoId], references: [id], onDelete: SetNull)
+  trainingVideoId String?
+  trainingVideo   TrainingVideo? @relation(fields: [trainingVideoId], references: [id], onDelete: SetNull)
+  minutes   Int
+  loggedAt  DateTime     @default(now())
+  note      String?
+  createdAt DateTime     @default(now())
+
+  @@index([playerId])
+  @@index([videoId])
+  @@index([trainingVideoId])
+}
+
+// The shared, coach-uploaded drill video library (Techne's "weekly guided
+// session" equivalent) - team-scoped, NOT per-player like PlayerVideo.
+// Coaches upload directly from the app (see /api/uploads/video); this is
+// intentionally separate infrastructure from the WordPress-synced
+// PlayerVideo model, which is a per-player bio/highlight list.
+model TrainingVideo {
+  id           String   @id @default(cuid())
+  teamId       String
+  team         Team     @relation(fields: [teamId], references: [id])
+  title        String
+  description  String?
+  // Freeform tags rather than an enum, so new categories/levels don't need
+  // a schema change - "Dribbling"/"Passing"/"Juggling"/"Shooting"/"Mental"/
+  // "Physical"/"Recovery" and "Beginner"/"Intermediate"/"Advanced" mirror
+  // Techne's own categories but aren't enforced.
+  category     String?
+  difficulty   String?
+  videoUrl     String
+  // Tags this as part of a given week's session, so the library can be
+  // filtered/sorted the way Techne surfaces "this week's" content, without
+  // needing a separate "session" model.
+  weekOf       DateTime?
+  uploadedByMembershipId String?
+  position     Int      @default(0)
+  createdAt    DateTime @default(now())
+  trainingLogs PlayerTrainingLog[]
+
+  @@index([teamId])
+}
+
+// A player's self-recorded score for a named skill test (e.g. "Juggles in
+// 60s", "Cone weave time") - distinct from PlayerEvaluation, which is a
+// subjective 1-4 coach rating. This is an objective number the player (or
+// a coach, on their behalf) records themselves, meant to be tracked as a
+// trend across repeated attempts at the same testName.
+model PlayerSkillTest {
+  id         String   @id @default(cuid())
+  playerId   String
+  player     Player   @relation(fields: [playerId], references: [id], onDelete: Cascade)
+  testName   String
+  score      Float
+  unit       String   // e.g. "reps", "seconds", "makes"
+  recordedAt DateTime @default(now())
+  note       String?
+  createdAt  DateTime @default(now())
+
+  @@index([playerId])
+  @@index([playerId, testName])
 }
 
 // Qualitative Development Evaluation (QDE): a periodic coach assessment of

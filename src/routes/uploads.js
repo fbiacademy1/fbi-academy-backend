@@ -1,7 +1,7 @@
 const express = require("express");
 const multer = require("multer");
 const crypto = require("crypto");
-const { requireAuth } = require("../middleware/auth");
+const { requireAuth, requireTeamMembership, requireRole } = require("../middleware/auth");
 const { getSupabase } = require("../supabase");
 
 const router = express.Router();
@@ -14,6 +14,23 @@ const upload = multer({
   limits: { fileSize: 8 * 1024 * 1024 }, // 8MB
   fileFilter: (req, file, cb) => {
     if (!file.mimetype.startsWith("image/")) return cb(new Error("Only image uploads are allowed"));
+    cb(null, true);
+  },
+});
+
+// Separate instance for the Training Video library (drill clips a coach
+// records/uploads for the whole team). Videos are much bigger than profile
+// photos, so this gets its own generous-but-bounded limit and its own
+// Supabase Storage bucket - kept as a fully separate multer config rather
+// than a shared one so the 8MB photo limit above is never accidentally
+// loosened. 150MB comfortably covers a short (30-90s) 1080p drill clip;
+// coaches recording longer/higher-res footage should trim or compress it
+// first, same guidance Techne itself gives for its own drill clips.
+const uploadVideo = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 150 * 1024 * 1024 }, // 150MB
+  fileFilter: (req, file, cb) => {
+    if (!file.mimetype.startsWith("video/")) return cb(new Error("Only video uploads are allowed"));
     cb(null, true);
   },
 });
@@ -47,6 +64,43 @@ router.post("/", requireAuth, upload.single("image"), async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+// POST /api/uploads/video  (multipart/form-data, field name "video")
+// Coach/admin only - used for the Training Video library. Returns a URL,
+// same two-step pattern as the image endpoint above: upload the file here
+// first, then POST /api/training-videos with the returned url as videoUrl.
+router.post(
+  "/video",
+  requireAuth,
+  requireTeamMembership,
+  requireRole("admin", "coach"),
+  uploadVideo.single("video"),
+  async (req, res) => {
+    if (!req.file) return res.status(400).json({ error: "No video file provided" });
+
+    const bucket = process.env.SUPABASE_VIDEO_BUCKET || "training-videos";
+    const ext = (req.file.originalname.match(/\.[a-zA-Z0-9]+$/) || [".mp4"])[0];
+    const filename = `${Date.now()}-${crypto.randomBytes(6).toString("hex")}${ext}`;
+
+    try {
+      const supabase = getSupabase();
+      const { error: uploadError } = await supabase.storage
+        .from(bucket)
+        .upload(filename, req.file.buffer, { contentType: req.file.mimetype, upsert: false });
+
+      if (uploadError) {
+        console.error("[uploads] Supabase video upload failed:", uploadError.message);
+        return res.status(502).json({ error: "Upload failed - try again" });
+      }
+
+      const { data } = supabase.storage.from(bucket).getPublicUrl(filename);
+      res.status(201).json({ url: data.publicUrl });
+    } catch (err) {
+      console.error("[uploads] video error:", err.message);
+      res.status(500).json({ error: err.message });
+    }
+  }
+);
 
 // Multer errors (file too large, wrong type) land here instead of the
 // generic 500 handler, so the app gets a useful message.

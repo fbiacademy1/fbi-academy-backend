@@ -21,6 +21,90 @@ function pick(obj, keys) {
   return out;
 }
 
+// --- Training-log aggregation, shared by /training-summary and /leaderboard ---
+function startOfDay(d) {
+  const x = new Date(d);
+  x.setHours(0, 0, 0, 0);
+  return x;
+}
+function dateKey(d) {
+  const x = new Date(d);
+  return `${x.getFullYear()}-${x.getMonth()}-${x.getDate()}`;
+}
+function summarizeTrainingLogs(logs) {
+  if (!logs || logs.length === 0) return { total: 0, week: 0, streak: 0 };
+  const now = new Date();
+  const weekStart = startOfDay(now);
+  weekStart.setDate(weekStart.getDate() - weekStart.getDay());
+
+  let total = 0, week = 0;
+  const daySet = new Set();
+  logs.forEach((l) => {
+    const d = new Date(l.loggedAt);
+    total += l.minutes;
+    if (d >= weekStart) week += l.minutes;
+    daySet.add(dateKey(d));
+  });
+
+  let streak = 0;
+  const cursor = startOfDay(now);
+  if (!daySet.has(dateKey(cursor))) cursor.setDate(cursor.getDate() - 1);
+  while (daySet.has(dateKey(cursor))) {
+    streak += 1;
+    cursor.setDate(cursor.getDate() - 1);
+  }
+  return { total, week, streak };
+}
+
+// GET /api/players/training-summary  (admin/coach only)
+// Rollup of every player's training activity - the Techne "Manager Portal"
+// equivalent: a coach can see who's training, how often, and how it's
+// trending without opening each profile individually. Registered ahead of
+// GET /:id so "training-summary" is never swallowed as a player id.
+router.get("/training-summary", requireRole("admin", "coach"), asyncHandler(async (req, res) => {
+  const players = await prisma.player.findMany({
+    where: { teamId: req.membership.teamId },
+    select: { id: true, firstName: true, lastName: true, photoUrl: true, jerseyNumber: true },
+    orderBy: [{ lastName: "asc" }],
+  });
+  const logs = await prisma.playerTrainingLog.findMany({
+    where: { player: { teamId: req.membership.teamId } },
+    select: { playerId: true, minutes: true, loggedAt: true },
+  });
+  const byPlayer = new Map();
+  logs.forEach((l) => {
+    if (!byPlayer.has(l.playerId)) byPlayer.set(l.playerId, []);
+    byPlayer.get(l.playerId).push(l);
+  });
+  const summary = players.map((p) => ({ ...p, ...summarizeTrainingLogs(byPlayer.get(p.id)) }));
+  res.json(summary);
+}));
+
+// GET /api/players/leaderboard
+// Team-scoped, opt-in only: players/guardians who've never turned
+// leaderboardOptIn on never appear here, regardless of how much they've
+// trained. Visible to every team member (that's the point of a
+// leaderboard), ranked by minutes trained this week.
+router.get("/leaderboard", asyncHandler(async (req, res) => {
+  const players = await prisma.player.findMany({
+    where: { teamId: req.membership.teamId, leaderboardOptIn: true },
+    select: { id: true, firstName: true, lastName: true, photoUrl: true, jerseyNumber: true },
+  });
+  const logs = await prisma.playerTrainingLog.findMany({
+    where: { player: { teamId: req.membership.teamId, leaderboardOptIn: true } },
+    select: { playerId: true, minutes: true, loggedAt: true },
+  });
+  const byPlayer = new Map();
+  logs.forEach((l) => {
+    if (!byPlayer.has(l.playerId)) byPlayer.set(l.playerId, []);
+    byPlayer.get(l.playerId).push(l);
+  });
+  const ranked = players
+    .map((p) => ({ ...p, ...summarizeTrainingLogs(byPlayer.get(p.id)) }))
+    .sort((a, b) => b.week - a.week || b.streak - a.streak);
+  res.json(ranked);
+}));
+
 // GET /api/players  -> roster for the current team (see x-team-id header).
 // Players get a trimmed view of everyone but themselves; coaches/admins see
 // everything (used for contact info, sync status, etc.).
@@ -56,7 +140,22 @@ router.get("/:id", asyncHandler(async (req, res) => {
   const player = await prisma.player.findUnique({
     where: { id: req.params.id },
     include: isStaff || isSelf
-      ? { videos: { orderBy: { position: "asc" } }, evaluations: { orderBy: { evaluationDate: "desc" } } }
+      ? {
+          videos: { orderBy: { position: "asc" } },
+          evaluations: { orderBy: { evaluationDate: "desc" } },
+          skillTests: { orderBy: { recordedAt: "desc" } },
+          // Capped so a long-running player's profile load doesn't grow
+          // unbounded - full history is available via the dedicated
+          // /training-logs endpoint below if ever needed.
+          trainingLogs: {
+            orderBy: { loggedAt: "desc" },
+            take: 200,
+            include: {
+              video: { select: { id: true, title: true } },
+              trainingVideo: { select: { id: true, title: true } },
+            },
+          },
+        }
       : undefined,
   });
   if (!player || player.teamId !== req.membership.teamId) {
@@ -146,6 +245,7 @@ router.put("/:id", asyncHandler(async (req, res) => {
   const {
     firstName, lastName, email, phone, jerseyNumber, position,
     birthdate, photoUrl, favoritePlayerPhotoUrl, guardianName, guardianPhone, guardianEmail, emergencyContact, notes,
+    leaderboardOptIn,
   } = req.body;
 
   const updated = await prisma.player.update({
@@ -154,6 +254,7 @@ router.put("/:id", asyncHandler(async (req, res) => {
       firstName, lastName, email, phone, jerseyNumber, position,
       birthdate: birthdate ? new Date(birthdate) : undefined,
       photoUrl, favoritePlayerPhotoUrl, guardianName, guardianPhone, guardianEmail, emergencyContact, notes,
+      leaderboardOptIn,
       syncStatus: "pending",
     },
   });
@@ -253,6 +354,173 @@ router.post("/:id/evaluations", requireRole("admin", "coach"), asyncHandler(asyn
   });
 
   res.status(201).json(evaluation);
+}));
+
+// GET /api/players/:id/training-logs - full self-training log history for
+// a player. Same visibility rule as evaluations: coach/admin, or the
+// player viewing their own history, only.
+router.get("/:id/training-logs", asyncHandler(async (req, res) => {
+  const player = await prisma.player.findUnique({ where: { id: req.params.id } });
+  if (!player || player.teamId !== req.membership.teamId) {
+    return res.status(404).json({ error: "Player not found" });
+  }
+  const isStaff = ["admin", "coach"].includes(req.membership.role);
+  const isSelf = req.membership.playerId === player.id;
+  if (!isStaff && !isSelf) {
+    return res.status(403).json({ error: "You can only view your own training log" });
+  }
+  const trainingLogs = await prisma.playerTrainingLog.findMany({
+    where: { playerId: player.id },
+    orderBy: { loggedAt: "desc" },
+  });
+  res.json(trainingLogs);
+}));
+
+// POST /api/players/:id/training-logs - records a self-training session.
+// minutes is expected to come from an in-app start/stop timer, not a
+// free-typed number. videoId is optional (set when the player started the
+// timer from a specific drill video). Self or staff only - staff can log
+// on a player's behalf (e.g. a young player without their own device).
+router.post("/:id/training-logs", asyncHandler(async (req, res) => {
+  const player = await prisma.player.findUnique({ where: { id: req.params.id } });
+  if (!player || player.teamId !== req.membership.teamId) {
+    return res.status(404).json({ error: "Player not found" });
+  }
+  const isStaff = ["admin", "coach"].includes(req.membership.role);
+  const isSelf = req.membership.playerId === player.id;
+  if (!isStaff && !isSelf) {
+    return res.status(403).json({ error: "You can only log your own training time" });
+  }
+
+  const { minutes, videoId, trainingVideoId, note, loggedAt } = req.body;
+  const n = Number(minutes);
+  if (!Number.isInteger(n) || n < 1 || n > 600) {
+    return res.status(400).json({ error: "minutes must be an integer between 1 and 600" });
+  }
+
+  if (videoId) {
+    const video = await prisma.playerVideo.findUnique({ where: { id: videoId } });
+    if (!video || video.playerId !== player.id) {
+      return res.status(400).json({ error: "videoId does not belong to this player" });
+    }
+  }
+  if (trainingVideoId) {
+    // TrainingVideo is team-scoped (shared library), not per-player.
+    const trainingVideo = await prisma.trainingVideo.findUnique({ where: { id: trainingVideoId } });
+    if (!trainingVideo || trainingVideo.teamId !== player.teamId) {
+      return res.status(400).json({ error: "trainingVideoId does not belong to this team" });
+    }
+  }
+
+  const log = await prisma.playerTrainingLog.create({
+    data: {
+      playerId: player.id,
+      videoId: videoId || undefined,
+      trainingVideoId: trainingVideoId || undefined,
+      minutes: n,
+      note: note || undefined,
+      loggedAt: loggedAt ? new Date(loggedAt) : undefined,
+    },
+    include: {
+      video: { select: { id: true, title: true } },
+      trainingVideo: { select: { id: true, title: true } },
+    },
+  });
+
+  res.status(201).json(log);
+}));
+
+// DELETE /api/players/:id/training-logs/:logId - removes a single logged
+// session (e.g. an accidental timer start). Self or staff only.
+router.delete("/:id/training-logs/:logId", asyncHandler(async (req, res) => {
+  const player = await prisma.player.findUnique({ where: { id: req.params.id } });
+  if (!player || player.teamId !== req.membership.teamId) {
+    return res.status(404).json({ error: "Player not found" });
+  }
+  const isStaff = ["admin", "coach"].includes(req.membership.role);
+  const isSelf = req.membership.playerId === player.id;
+  if (!isStaff && !isSelf) {
+    return res.status(403).json({ error: "You can only edit your own training log" });
+  }
+
+  const log = await prisma.playerTrainingLog.findUnique({ where: { id: req.params.logId } });
+  if (!log || log.playerId !== player.id) {
+    return res.status(404).json({ error: "Training log entry not found" });
+  }
+  await prisma.playerTrainingLog.delete({ where: { id: log.id } });
+  res.status(204).end();
+}));
+
+// GET /api/players/:id/skill-tests - full skill-test history for a player,
+// same visibility rule as evaluations/training-logs (coach/admin or self).
+router.get("/:id/skill-tests", asyncHandler(async (req, res) => {
+  const player = await prisma.player.findUnique({ where: { id: req.params.id } });
+  if (!player || player.teamId !== req.membership.teamId) {
+    return res.status(404).json({ error: "Player not found" });
+  }
+  const isStaff = ["admin", "coach"].includes(req.membership.role);
+  const isSelf = req.membership.playerId === player.id;
+  if (!isStaff && !isSelf) {
+    return res.status(403).json({ error: "You can only view your own skill tests" });
+  }
+  const skillTests = await prisma.playerSkillTest.findMany({
+    where: { playerId: player.id },
+    orderBy: { recordedAt: "desc" },
+  });
+  res.json(skillTests);
+}));
+
+// POST /api/players/:id/skill-tests - records a self-timed/self-counted
+// score (e.g. "Juggles in 60s": score 34, unit "reps"). Self or staff only.
+router.post("/:id/skill-tests", asyncHandler(async (req, res) => {
+  const player = await prisma.player.findUnique({ where: { id: req.params.id } });
+  if (!player || player.teamId !== req.membership.teamId) {
+    return res.status(404).json({ error: "Player not found" });
+  }
+  const isStaff = ["admin", "coach"].includes(req.membership.role);
+  const isSelf = req.membership.playerId === player.id;
+  if (!isStaff && !isSelf) {
+    return res.status(403).json({ error: "You can only record your own skill tests" });
+  }
+
+  const { testName, score, unit, note, recordedAt } = req.body;
+  const s = Number(score);
+  if (!testName || !unit || !Number.isFinite(s)) {
+    return res.status(400).json({ error: "testName, score (number), and unit are required" });
+  }
+
+  const skillTest = await prisma.playerSkillTest.create({
+    data: {
+      playerId: player.id,
+      testName,
+      score: s,
+      unit,
+      note: note || undefined,
+      recordedAt: recordedAt ? new Date(recordedAt) : undefined,
+    },
+  });
+  res.status(201).json(skillTest);
+}));
+
+// DELETE /api/players/:id/skill-tests/:testId - removes a single recorded
+// score (e.g. a mis-entered attempt). Self or staff only.
+router.delete("/:id/skill-tests/:testId", asyncHandler(async (req, res) => {
+  const player = await prisma.player.findUnique({ where: { id: req.params.id } });
+  if (!player || player.teamId !== req.membership.teamId) {
+    return res.status(404).json({ error: "Player not found" });
+  }
+  const isStaff = ["admin", "coach"].includes(req.membership.role);
+  const isSelf = req.membership.playerId === player.id;
+  if (!isStaff && !isSelf) {
+    return res.status(403).json({ error: "You can only edit your own skill tests" });
+  }
+
+  const skillTest = await prisma.playerSkillTest.findUnique({ where: { id: req.params.testId } });
+  if (!skillTest || skillTest.playerId !== player.id) {
+    return res.status(404).json({ error: "Skill test entry not found" });
+  }
+  await prisma.playerSkillTest.delete({ where: { id: skillTest.id } });
+  res.status(204).end();
 }));
 
 module.exports = router;
