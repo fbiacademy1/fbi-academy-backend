@@ -130,4 +130,50 @@ router.post("/push-token", requireAuth, asyncHandler(async (req, res) => {
   res.json({ ok: true });
 }));
 
+// GET /api/auth/my-kids - every child this guardian (role:"parent") is
+// linked to, across EVERY team, in one call. Everything under /api/players
+// is scoped to req.membership.teamId (one team at a time, via
+// requireTeamMembership - see middleware/auth.js), which is exactly why a
+// guardian with kids on different teams can't get a combined view from
+// those endpoints without switching active team first. This sits on
+// /api/auth instead since it only needs the JWT, not an active team - lets
+// the mobile app show a "My Kids" screen with every linked child up front,
+// then use setActiveTeam(teamId, membershipId) to drill into one.
+router.get("/my-kids", requireAuth, asyncHandler(async (req, res) => {
+  const memberships = await prisma.membership.findMany({
+    where: { userId: req.user.userId, role: "parent" },
+    include: { team: true },
+  });
+
+  const playerIds = [...new Set(memberships.map((m) => m.viewPlayerId).filter(Boolean))];
+  const players = playerIds.length
+    ? await prisma.player.findMany({
+        where: { id: { in: playerIds } },
+        select: { id: true, firstName: true, lastName: true, photoUrl: true, position: true, jerseyNumber: true },
+      })
+    : [];
+  const playerById = new Map(players.map((p) => [p.id, p]));
+
+  const kids = memberships
+    .map((m) => {
+      const player = playerById.get(m.viewPlayerId);
+      if (!player) return null; // roster row not synced yet - drop rather than show a broken card
+      return {
+        membershipId: m.id,
+        teamId: m.teamId,
+        teamName: m.team.name,
+        sport: m.team.sport,
+        playerId: player.id,
+        firstName: player.firstName,
+        lastName: player.lastName,
+        photoUrl: player.photoUrl,
+        position: player.position,
+        jerseyNumber: player.jerseyNumber,
+      };
+    })
+    .filter(Boolean);
+
+  res.json(kids);
+}));
+
 module.exports = router;
