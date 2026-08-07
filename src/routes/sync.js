@@ -1,7 +1,7 @@
 const express = require("express");
 const { requireWordpressSecret, requireFbiSecret } = require("../middleware/auth");
 const { applyWordpressWebhook } = require("../services/wordpressSync");
-const { applyWordpressTeamAssignment, applyWordpressCoachTeamAssignment, applyWordpressCreateTeam, applyWordpressGuardianLink } = require("../services/teamAssignmentSync");
+const { applyWordpressTeamAssignment, applyWordpressCoachTeamAssignment, applyWordpressCreateTeam, applyWordpressGuardianLink, removeWordpressPlayer } = require("../services/teamAssignmentSync");
 const prisma = require("../db");
 
 const router = express.Router();
@@ -84,6 +84,23 @@ router.post("/wordpress-guardian-link", requireFbiSecret, async (req, res) => {
     res.json({ ok: true, ...result });
   } catch (err) {
     console.error("[sync] guardian link webhook error:", err.message);
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// POST /api/sync/wordpress-player-removed
+// Called by the Coach Portal's "Delete Player" admin action, right after it
+// deletes that player's WordPress login. Body: { wpPlayerId } - the WP user
+// id (this player's wpPlayerId in TeamSync). Cleans up every Player row for
+// them across every team, their own login's access, and revokes any
+// guardian's link to specifically this child. See removeWordpressPlayer for
+// exactly what is and isn't touched.
+router.post("/wordpress-player-removed", requireFbiSecret, async (req, res) => {
+  try {
+    const result = await removeWordpressPlayer(req.body);
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    console.error("[sync] player removed webhook error:", err.message);
     res.status(400).json({ error: err.message });
   }
 });

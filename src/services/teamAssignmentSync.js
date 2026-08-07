@@ -201,6 +201,57 @@ async function applyWordpressGuardianLink({ wpGuardianId, email, children }) {
 }
 
 /**
+ * Called from the Coach Portal's "Delete Player" admin action - the full
+ * club-offboarding counterpart to DELETE /api/players/:id above, which only
+ * ever unrosters ONE team and deliberately leaves everything else alone.
+ * This is for when a player has actually left the club: WordPress has
+ * already deleted their WP login (wp_delete_user - the real access-control
+ * boundary, since login always checks against WordPress), and this cleans
+ * up everything TeamSync-side left pointing at them:
+ *   - Every Player row for this wpPlayerId, across EVERY team they were
+ *     rostered on (not just one), plus their videos/evaluations/RSVPs/
+ *     training logs/skill tests, and their own Membership (their login's
+ *     access to those teams).
+ *   - Any GUARDIAN's role:"parent" Membership whose viewPlayerId pointed at
+ *     one of those Player rows - this is what actually revokes a parent's
+ *     access to THIS specific child. It only removes the guardian's link to
+ *     this one kid: if they have other kids still on the roster, their
+ *     login and those other links are untouched.
+ * Neither this player's nor any guardian's User row is deleted here - not
+ * needed, since WordPress already revoked their credentials, and deleting a
+ * User could orphan direct-message history. An already-open app session
+ * (already-issued JWT) isn't force-logged-out by this either - there's no
+ * token revocation list - it naturally stops being useful once nothing it
+ * points at exists anymore.
+ */
+async function removeWordpressPlayer({ wpPlayerId }) {
+  if (!wpPlayerId) throw new Error("wpPlayerId is required");
+
+  const players = await prisma.player.findMany({ where: { wpPlayerId } });
+  const playerIds = players.map((p) => p.id);
+  if (playerIds.length === 0) return { removedPlayers: 0, revokedGuardianLinks: 0 };
+
+  const revoked = await prisma.membership.deleteMany({
+    where: { role: "parent", viewPlayerId: { in: playerIds } },
+  });
+
+  await prisma.$transaction([
+    prisma.playerVideo.deleteMany({ where: { playerId: { in: playerIds } } }),
+    prisma.playerEvaluation.deleteMany({ where: { playerId: { in: playerIds } } }),
+    prisma.playerTrainingLog.deleteMany({ where: { playerId: { in: playerIds } } }),
+    prisma.playerSkillTest.deleteMany({ where: { playerId: { in: playerIds } } }),
+    prisma.rSVP.deleteMany({ where: { playerId: { in: playerIds } } }),
+    // Keep the message history, just detach the author, same as the
+    // single-team delete above.
+    prisma.message.updateMany({ where: { authorPlayerId: { in: playerIds } }, data: { authorPlayerId: null } }),
+    prisma.membership.deleteMany({ where: { playerId: { in: playerIds } } }),
+    prisma.player.deleteMany({ where: { id: { in: playerIds } } }),
+  ]);
+
+  return { removedPlayers: playerIds.length, revokedGuardianLinks: revoked.count };
+}
+
+/**
  * The reverse direction: called after a coach adds/removes a player from a
  * team inside the TeamSync app itself, to push that player's full current
  * team list back to WordPress so pp_team_ids stays accurate there too.
@@ -234,5 +285,6 @@ module.exports = {
   applyWordpressCoachTeamAssignment,
   applyWordpressCreateTeam,
   applyWordpressGuardianLink,
+  removeWordpressPlayer,
   pushTeamAssignmentToWordpress,
 };
