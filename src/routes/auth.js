@@ -18,7 +18,15 @@ async function membershipsFor(userId) {
     teamName: m.team.name,
     sport: m.team.sport,
     role: m.role,
-    playerId: m.playerId,
+    // For role:"parent" rows, playerId itself is null (that column is
+    // reserved for the child's own login - see the unique constraint on
+    // Membership.playerId) and viewPlayerId carries which child this
+    // guardian can act on behalf of instead. Every screen in the app reads
+    // activeMembership.playerId to know "which player am I", so merging
+    // the two here means a guardian gets the exact same player-scoped
+    // experience (training videos, RSVP, roster "isSelf") as the child's
+    // own login would, with no other app code needing to know guardians exist.
+    playerId: m.playerId || m.viewPlayerId,
     homeJerseyColor: m.team.homeJerseyColor,
     homeShortsColor: m.team.homeShortsColor,
     homeSocksColor: m.team.homeSocksColor,

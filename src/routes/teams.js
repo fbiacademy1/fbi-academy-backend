@@ -19,7 +19,10 @@ router.get("/", asyncHandler(async (req, res) => {
       sport: m.team.sport,
       season: m.team.season,
       role: m.role,
-      playerId: m.playerId,
+      // See the matching comment in auth.js membershipsFor() - merges a
+      // guardian's viewPlayerId in so parent-role memberships behave like
+      // player-role ones everywhere the app reads playerId.
+      playerId: m.playerId || m.viewPlayerId,
       homeJerseyColor: m.team.homeJerseyColor,
       homeShortsColor: m.team.homeShortsColor,
       homeSocksColor: m.team.homeSocksColor,

@@ -1,7 +1,7 @@
 const express = require("express");
 const { requireWordpressSecret, requireFbiSecret } = require("../middleware/auth");
 const { applyWordpressWebhook } = require("../services/wordpressSync");
-const { applyWordpressTeamAssignment, applyWordpressCoachTeamAssignment, applyWordpressCreateTeam } = require("../services/teamAssignmentSync");
+const { applyWordpressTeamAssignment, applyWordpressCoachTeamAssignment, applyWordpressCreateTeam, applyWordpressGuardianLink } = require("../services/teamAssignmentSync");
 const prisma = require("../db");
 
 const router = express.Router();
@@ -70,6 +70,22 @@ router.post("/wordpress-create-team", requireFbiSecret, async (req, res) => {
           console.error("[sync] create team webhook error:", err.message);
           res.status(400).json({ error: err.message });
     }
+});
+
+// POST /api/sync/wordpress-guardian-link
+// Called by the Coach Portal whenever a player's Guardian Email is set or
+// changed. Body: { wpGuardianId, email, children: [{ wpPlayerId, teamId }] }
+// - the full, current list of every child/team pair sharing that guardian
+// email, so this fully reconciles (adds/updates/removes) rather than only
+// adding. See applyWordpressGuardianLink for what this actually does.
+router.post("/wordpress-guardian-link", requireFbiSecret, async (req, res) => {
+  try {
+    const result = await applyWordpressGuardianLink(req.body);
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    console.error("[sync] guardian link webhook error:", err.message);
+    res.status(400).json({ error: err.message });
+  }
 });
 
 module.exports = router;

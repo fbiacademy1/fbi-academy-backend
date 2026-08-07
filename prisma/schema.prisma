@@ -77,6 +77,16 @@ model Membership {
   role      String   // "admin" | "coach" | "player" | "parent"
   playerId  String?  @unique
   player    Player?  @relation(fields: [playerId], references: [id])
+  // For role:"parent" memberships only - which child's Player this guardian
+  // login can view/act on behalf of (RSVP, watch training videos, log
+  // sessions, etc.) for that team. Deliberately NOT unique like playerId:
+  // several guardians can share view access to the same child (both
+  // parents), and one guardian gets one such row per team+child. A guardian
+  // whose two kids happen to be rostered on the exact same team can only be
+  // linked to one of them there, since a user can still only have one
+  // Membership per team (see @@unique below) - a rare edge case, not solved
+  // here.
+  viewPlayerId String?
   createdAt DateTime @default(now())
   volunteerRoles VolunteerRole[]
   // Coach/admin RSVPs (players RSVP via Player/playerId instead - see RSVP model).
