@@ -260,6 +260,20 @@ router.post("/profile/slots", asyncHandler(async (req, res) => {
   res.status(201).json(created);
 }));
 
+// GET /api/personal-training/profile/slots - the coach's own slots
+// (future and past), so they can see what's already open and how full it
+// is before adding more or deleting an unbooked one.
+router.get("/profile/slots", asyncHandler(async (req, res) => {
+  const profile = await ownProfileOr404(req, res);
+  if (!profile) return;
+
+  const slots = await prisma.pTAvailabilitySlot.findMany({
+    where: { profileId: profile.id },
+    orderBy: { startTime: "asc" },
+  });
+  res.json(slots);
+}));
+
 // DELETE /api/personal-training/profile/slots/:id - remove a slot that has
 // no bookings yet.
 router.delete("/profile/slots/:id", asyncHandler(async (req, res) => {

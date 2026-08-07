@@ -36,6 +36,7 @@ model Team {
   messages       Message[]
   directMessages DirectMessage[]
   trainingVideos TrainingVideo[]
+  skillVideos    PlayerSkillVideo[]
 
 }
 
@@ -219,9 +220,40 @@ model Player {
   evaluations PlayerEvaluation[]
   trainingLogs PlayerTrainingLog[]
   skillTests  PlayerSkillTest[]
+  skillVideos PlayerSkillVideo[]
 
   @@index([wordpressPostId])
   @@index([wpPlayerId])
+}
+
+// A player/parent-submitted "skill video" (soccer tricks, juggling, etc.)
+// awaiting coach/admin review. Distinct from TrainingVideo (coach-uploaded
+// weekly drills, shared team library) and PlayerVideo (WordPress-sourced
+// bio/highlight links) - this is the submission inbox: any roster member can
+// upload one (see POST /api/uploads/skill-video, unrestricted by role,
+// unlike the coach-only /api/uploads/video), but it's only visible on the
+// submitter's own "My Trick Videos" list until a coach/admin approves it,
+// and only shows on the public fbiacademy.org site if additionally marked
+// featured. teamId is denormalized (also reachable via player.teamId) so
+// the coach review-queue endpoint can query directly without a join.
+model PlayerSkillVideo {
+  id                      String    @id @default(cuid())
+  teamId                  String
+  team                    Team      @relation(fields: [teamId], references: [id])
+  playerId                String
+  player                  Player    @relation(fields: [playerId], references: [id], onDelete: Cascade)
+  title                   String?
+  videoUrl                String
+  submittedByMembershipId String?
+  status                  String    @default("pending") // "pending" | "approved" | "rejected"
+  featured                Boolean   @default(false)
+  coachNotes              String?
+  reviewedAt              DateTime?
+  createdAt               DateTime  @default(now())
+
+  @@index([teamId])
+  @@index([playerId])
+  @@index([status])
 }
 
 // A video link shown on a player's profile (title + URL, e.g. YouTube/Vimeo).

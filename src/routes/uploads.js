@@ -102,6 +102,45 @@ router.post(
   }
 );
 
+// POST /api/uploads/skill-video  (multipart/form-data, field name "video")
+// Any team member (player, parent, coach, admin) - used for the trick-video
+// submission feature. Deliberately NOT gated to requireRole("admin","coach")
+// like /video above: players/parents are exactly who needs to upload here.
+// Reuses the same multer config/size limit as the training-video upload,
+// just a separate bucket so submissions never mix with the coach-curated
+// drill library.
+router.post(
+  "/skill-video",
+  requireAuth,
+  requireTeamMembership,
+  uploadVideo.single("video"),
+  async (req, res) => {
+    if (!req.file) return res.status(400).json({ error: "No video file provided" });
+
+    const bucket = process.env.SUPABASE_SKILL_VIDEO_BUCKET || "skill-videos";
+    const ext = (req.file.originalname.match(/\.[a-zA-Z0-9]+$/) || [".mp4"])[0];
+    const filename = `${Date.now()}-${crypto.randomBytes(6).toString("hex")}${ext}`;
+
+    try {
+      const supabase = getSupabase();
+      const { error: uploadError } = await supabase.storage
+        .from(bucket)
+        .upload(filename, req.file.buffer, { contentType: req.file.mimetype, upsert: false });
+
+      if (uploadError) {
+        console.error("[uploads] Supabase skill-video upload failed:", uploadError.message);
+        return res.status(502).json({ error: "Upload failed - try again" });
+      }
+
+      const { data } = supabase.storage.from(bucket).getPublicUrl(filename);
+      res.status(201).json({ url: data.publicUrl });
+    } catch (err) {
+      console.error("[uploads] skill-video error:", err.message);
+      res.status(500).json({ error: err.message });
+    }
+  }
+);
+
 // Multer errors (file too large, wrong type) land here instead of the
 // generic 500 handler, so the app gets a useful message.
 router.use((err, req, res, next) => {
