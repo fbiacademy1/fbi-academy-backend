@@ -12,24 +12,42 @@ router.get("/", asyncHandler(async (req, res) => {
     where: { userId: req.user.userId },
     include: { team: true },
   });
+
+  // See the matching comment in auth.js membershipsFor() - a guardian can
+  // hold more than one role:"parent" membership on the same team (one per
+  // linked child), so batch-fetch each linked child's name for a
+  // disambiguating `playerName` label.
+  const mergedPlayerIds = [...new Set(memberships.map((m) => m.playerId || m.viewPlayerId).filter(Boolean))];
+  const players = mergedPlayerIds.length
+    ? await prisma.player.findMany({
+        where: { id: { in: mergedPlayerIds } },
+        select: { id: true, firstName: true, lastName: true },
+      })
+    : [];
+  const playerNameById = new Map(players.map((p) => [p.id, `${p.firstName} ${p.lastName}`.trim()]));
+
   res.json(
-    memberships.map((m) => ({
-      teamId: m.teamId,
-      teamName: m.team.name,
-      sport: m.team.sport,
-      season: m.team.season,
-      role: m.role,
+    memberships.map((m) => {
       // See the matching comment in auth.js membershipsFor() - merges a
       // guardian's viewPlayerId in so parent-role memberships behave like
       // player-role ones everywhere the app reads playerId.
-      playerId: m.playerId || m.viewPlayerId,
-      homeJerseyColor: m.team.homeJerseyColor,
-      homeShortsColor: m.team.homeShortsColor,
-      homeSocksColor: m.team.homeSocksColor,
-      awayJerseyColor: m.team.awayJerseyColor,
-      awayShortsColor: m.team.awayShortsColor,
-      awaySocksColor: m.team.awaySocksColor,
-    }))
+      const mergedPlayerId = m.playerId || m.viewPlayerId;
+      return {
+        teamId: m.teamId,
+        teamName: m.team.name,
+        sport: m.team.sport,
+        season: m.team.season,
+        role: m.role,
+        playerId: mergedPlayerId,
+        playerName: m.role === "parent" ? playerNameById.get(mergedPlayerId) || null : null,
+        homeJerseyColor: m.team.homeJerseyColor,
+        homeShortsColor: m.team.homeShortsColor,
+        homeSocksColor: m.team.homeSocksColor,
+        awayJerseyColor: m.team.awayJerseyColor,
+        awayShortsColor: m.team.awayShortsColor,
+        awaySocksColor: m.team.awaySocksColor,
+      };
+    })
   );
 }));
 
@@ -37,8 +55,11 @@ router.get("/", asyncHandler(async (req, res) => {
 // socks colors used to auto-populate new matches. Admin/coach on this team only.
 router.put("/:id/uniforms", asyncHandler(async (req, res) => {
   const teamId = req.params.id;
-  const membership = await prisma.membership.findUnique({
-    where: { userId_teamId: { userId: req.user.userId, teamId } },
+  // findFirst, not findUnique: a guardian can hold more than one membership
+  // on this team now, but none of them will ever be role admin/coach, so
+  // which one this picks doesn't affect the check below.
+  const membership = await prisma.membership.findFirst({
+    where: { userId: req.user.userId, teamId },
   });
   if (!membership || !["admin", "coach"].includes(membership.role)) {
     return res.status(403).json({ error: "Only a coach/admin on this team can edit uniform colors" });
@@ -78,8 +99,9 @@ router.post("/", asyncHandler(async (req, res) => {
 router.delete("/:id", asyncHandler(async (req, res) => {
   const teamId = req.params.id;
 
-  const membership = await prisma.membership.findUnique({
-    where: { userId_teamId: { userId: req.user.userId, teamId } },
+  // findFirst, not findUnique - see the matching comment on PUT /:id/uniforms above.
+  const membership = await prisma.membership.findFirst({
+    where: { userId: req.user.userId, teamId },
   });
   if (!membership || !["admin", "coach"].includes(membership.role)) {
     return res.status(403).json({ error: "Only a coach/admin on this team can delete it" });

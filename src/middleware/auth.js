@@ -21,14 +21,31 @@ function requireAuth(req, res, next) {
 // sent by the mobile app based on whichever team the user currently has
 // selected) and confirms the logged-in user actually belongs to it.
 // Attaches req.membership = { id, teamId, role, playerId }.
+//
+// A guardian can now hold more than one role:"parent" Membership on the SAME
+// team (one per linked child there), so userId+teamId alone no longer
+// uniquely identifies a Membership - the mobile app also sends
+// "x-membership-id" (the specific Membership.id it has active) once it
+// knows it, which this looks up first. Every other case (a plain
+// admin/coach/player, or a guardian's first request before it has an id to
+// send yet) falls back to "any membership on this team", same as before.
 async function requireTeamMembership(req, res, next) {
   try {
     const teamId = req.headers["x-team-id"];
     if (!teamId) return res.status(400).json({ error: "Missing x-team-id header" });
 
-    const membership = await prisma.membership.findUnique({
-      where: { userId_teamId: { userId: req.user.userId, teamId } },
-    });
+    const membershipId = req.headers["x-membership-id"];
+    let membership = null;
+    if (membershipId) {
+      membership = await prisma.membership.findFirst({
+        where: { id: membershipId, userId: req.user.userId, teamId },
+      });
+    }
+    if (!membership) {
+      membership = await prisma.membership.findFirst({
+        where: { userId: req.user.userId, teamId },
+      });
+    }
     if (!membership) return res.status(403).json({ error: "You don't have access to this team" });
 
     req.membership = membership;

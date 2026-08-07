@@ -81,18 +81,25 @@ model Membership {
   // login can view/act on behalf of (RSVP, watch training videos, log
   // sessions, etc.) for that team. Deliberately NOT unique like playerId:
   // several guardians can share view access to the same child (both
-  // parents), and one guardian gets one such row per team+child. A guardian
-  // whose two kids happen to be rostered on the exact same team can only be
-  // linked to one of them there, since a user can still only have one
-  // Membership per team (see @@unique below) - a rare edge case, not solved
-  // here.
+  // parents), and one guardian gets one such row per team+child - including
+  // when two of their kids are rostered on the exact same team, in which
+  // case they hold two separate parent Memberships there (one per child).
   viewPlayerId String?
   createdAt DateTime @default(now())
   volunteerRoles VolunteerRole[]
   // Coach/admin RSVPs (players RSVP via Player/playerId instead - see RSVP model).
   rsvps          RSVP[]
 
-  @@unique([userId, teamId])
+  // NOTE: this is no longer a plain @@unique([userId, teamId]). A guardian
+  // can hold multiple role:"parent" rows on the same team (one per linked
+  // child), so the real constraint is two Postgres PARTIAL unique indexes,
+  // applied by hand via add-membership-multi-parent-per-team.sql (this
+  // project's schema is managed by hand, not `prisma migrate` - see the note
+  // at the top of this file):
+  //   - one membership per (userId, teamId) for role <> 'parent'
+  //   - one membership per (userId, teamId, viewPlayerId) for role = 'parent'
+  // Prisma's schema syntax can't express a partial index, so it's not
+  // declared here - just enforced in the DB directly.
 }
 
 model Player {

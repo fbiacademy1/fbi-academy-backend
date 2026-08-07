@@ -131,13 +131,22 @@ async function applyWordpressCreateTeam({ name, sport, season }) {
  * pattern as a coach or player login above), then makes their role:"parent"
  * Memberships match the full, fresh list of {wpPlayerId, teamId} pairs
  * WordPress just computed for every child sharing this guardian email -
- * adding any missing, updating any that moved, and removing any no longer
- * there. Unlike a child's own Membership.playerId (unique - one login per
- * Player, so the app always knows who a roster row "belongs" to),
- * viewPlayerId is deliberately NOT unique - it exists purely to tell the
- * app "which player is this guardian currently looking at", not to grant
- * ownership, so several guardians (or a guardian and the child themselves)
- * can all have their own separate login pointing at the same Player.
+ * adding any missing and removing any no longer there. Unlike a child's own
+ * Membership.playerId (unique - one login per Player, so the app always
+ * knows who a roster row "belongs" to), viewPlayerId is deliberately NOT
+ * unique - it exists purely to tell the app "which player is this guardian
+ * currently looking at", not to grant ownership, so several guardians (or a
+ * guardian and the child themselves) can all have their own separate login
+ * pointing at the same Player.
+ *
+ * Reconciliation is keyed by the (teamId, playerId) PAIR, not teamId alone -
+ * that's what lets a guardian hold two parent Memberships on the same team
+ * when two of their kids are rostered there. There's no "update" case
+ * anymore: a child moving to a different team (or a different guardian
+ * taking over) just looks like one pair disappearing and another appearing,
+ * handled by the add/remove loops below. The matching DB-level constraint is
+ * the partial unique index on (userId, teamId, viewPlayerId) for
+ * role:"parent" rows - see add-membership-multi-parent-per-team.sql.
  */
 async function applyWordpressGuardianLink({ wpGuardianId, email, children }) {
   if (!wpGuardianId) throw new Error("wpGuardianId is required");
@@ -164,34 +173,31 @@ async function applyWordpressGuardianLink({ wpGuardianId, email, children }) {
     if (player) resolved.push({ teamId, playerId: player.id });
   }
 
-  const existing = await prisma.membership.findMany({ where: { userId: user.id, role: "parent" } });
-  const existingByTeam = new Map(existing.map((m) => [m.teamId, m]));
-  const wantedTeamIds = new Set(resolved.map((r) => r.teamId));
+  const key = (teamId, playerId) => `${teamId}:${playerId}`;
 
-  let added = 0, updated = 0, removed = 0;
+  const existing = await prisma.membership.findMany({ where: { userId: user.id, role: "parent" } });
+  const existingByKey = new Map(existing.map((m) => [key(m.teamId, m.viewPlayerId), m]));
+  const wantedKeys = new Set(resolved.map(({ teamId, playerId }) => key(teamId, playerId)));
+
+  let added = 0, removed = 0;
   for (const { teamId, playerId } of resolved) {
-    const current = existingByTeam.get(teamId);
-    if (!current) {
-      await prisma.membership
-        .create({ data: { userId: user.id, teamId, role: "parent", viewPlayerId: playerId } })
-        .then(() => { added += 1; })
-        // A non-"parent" membership already on this team (e.g. this same
-        // person is also a coach there) collides with the userId+teamId
-        // unique constraint - skip rather than clobber it.
-        .catch((e) => console.error("[teamAssignmentSync] guardian membership create skipped:", e.message));
-    } else if (current.viewPlayerId !== playerId) {
-      await prisma.membership.update({ where: { id: current.id }, data: { viewPlayerId: playerId } });
-      updated += 1;
-    }
+    if (existingByKey.has(key(teamId, playerId))) continue;
+    await prisma.membership
+      .create({ data: { userId: user.id, teamId, role: "parent", viewPlayerId: playerId } })
+      .then(() => { added += 1; })
+      // A non-"parent" membership already on this exact team+child (e.g.
+      // this same person is also a coach there) collides with the partial
+      // unique index - skip rather than clobber it.
+      .catch((e) => console.error("[teamAssignmentSync] guardian membership create skipped:", e.message));
   }
   for (const m of existing) {
-    if (!wantedTeamIds.has(m.teamId)) {
+    if (!wantedKeys.has(key(m.teamId, m.viewPlayerId))) {
       await prisma.membership.delete({ where: { id: m.id } });
       removed += 1;
     }
   }
 
-  return { userId: user.id, added, updated, removed };
+  return { userId: user.id, added, removed };
 }
 
 /**

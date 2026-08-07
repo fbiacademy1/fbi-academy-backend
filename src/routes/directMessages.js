@@ -67,8 +67,11 @@ router.post("/", asyncHandler(async (req, res) => {
     return res.status(400).json({ error: "recipientId and body are required" });
   }
 
-  const recipientMembership = await prisma.membership.findUnique({
-    where: { userId_teamId: { userId: recipientId, teamId: req.membership.teamId } },
+  // findFirst, not findUnique: recipientId can now match more than one
+  // Membership if they're a guardian with two kids on this team - either
+  // one confirms they belong here, which is all this check needs.
+  const recipientMembership = await prisma.membership.findFirst({
+    where: { userId: recipientId, teamId: req.membership.teamId },
   });
   if (!recipientMembership) return res.status(404).json({ error: "That person isn't on this team" });
 

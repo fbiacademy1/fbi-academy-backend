@@ -12,12 +12,23 @@ async function membershipsFor(userId) {
     where: { userId },
     include: { team: true },
   });
-  return memberships.map((m) => ({
-    id: m.id,
-    teamId: m.teamId,
-    teamName: m.team.name,
-    sport: m.team.sport,
-    role: m.role,
+
+  // A guardian can now hold more than one role:"parent" Membership on the
+  // SAME team (one per linked child there - see teamAssignmentSync.js), so
+  // teamId alone is no longer enough to tell two of a guardian's memberships
+  // apart in a team switcher. Batch-fetch the linked child's name so parent
+  // rows can carry a `playerName` label the mobile app can show for
+  // disambiguation ("Eagles - Alex" vs "Eagles - Sam").
+  const mergedPlayerIds = [...new Set(memberships.map((m) => m.playerId || m.viewPlayerId).filter(Boolean))];
+  const players = mergedPlayerIds.length
+    ? await prisma.player.findMany({
+        where: { id: { in: mergedPlayerIds } },
+        select: { id: true, firstName: true, lastName: true },
+      })
+    : [];
+  const playerNameById = new Map(players.map((p) => [p.id, `${p.firstName} ${p.lastName}`.trim()]));
+
+  return memberships.map((m) => {
     // For role:"parent" rows, playerId itself is null (that column is
     // reserved for the child's own login - see the unique constraint on
     // Membership.playerId) and viewPlayerId carries which child this
@@ -26,14 +37,26 @@ async function membershipsFor(userId) {
     // the two here means a guardian gets the exact same player-scoped
     // experience (training videos, RSVP, roster "isSelf") as the child's
     // own login would, with no other app code needing to know guardians exist.
-    playerId: m.playerId || m.viewPlayerId,
-    homeJerseyColor: m.team.homeJerseyColor,
-    homeShortsColor: m.team.homeShortsColor,
-    homeSocksColor: m.team.homeSocksColor,
-    awayJerseyColor: m.team.awayJerseyColor,
-    awayShortsColor: m.team.awayShortsColor,
-    awaySocksColor: m.team.awaySocksColor,
-  }));
+    const mergedPlayerId = m.playerId || m.viewPlayerId;
+    return {
+      id: m.id,
+      teamId: m.teamId,
+      teamName: m.team.name,
+      sport: m.team.sport,
+      role: m.role,
+      playerId: mergedPlayerId,
+      // Only set for role:"parent" rows - null for a player's own login,
+      // where there's only ever one Membership per team so no disambiguation
+      // is needed.
+      playerName: m.role === "parent" ? playerNameById.get(mergedPlayerId) || null : null,
+      homeJerseyColor: m.team.homeJerseyColor,
+      homeShortsColor: m.team.homeShortsColor,
+      homeSocksColor: m.team.homeSocksColor,
+      awayJerseyColor: m.team.awayJerseyColor,
+      awayShortsColor: m.team.awayShortsColor,
+      awaySocksColor: m.team.awaySocksColor,
+    };
+  });
 }
 
 // POST /api/auth/login
