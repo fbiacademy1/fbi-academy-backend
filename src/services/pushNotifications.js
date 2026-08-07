@@ -30,4 +30,20 @@ async function sendTeamNotification(teamId, { title, body, data }, excludeUserId
   }
 }
 
-module.exports = { sendTeamNotification };
+// Sends a push notification to a single user (by userId), if they have a
+// registered, valid Expo push token. Used for notifications that aren't
+// team-scoped, e.g. a coach being told a Personal Training slot was booked.
+// Never throws, same contract as sendTeamNotification.
+async function sendUserNotification(userId, { title, body, data }) {
+  try {
+    const user = await prisma.user.findUnique({ where: { id: userId } });
+    if (!user?.pushToken || !Expo.isExpoPushToken(user.pushToken)) return;
+    await expo.sendPushNotificationsAsync([
+      { to: user.pushToken, sound: "default", title, body, data: data || {} },
+    ]);
+  } catch (err) {
+    console.error("sendUserNotification failed:", err.message);
+  }
+}
+
+module.exports = { sendTeamNotification, sendUserNotification };

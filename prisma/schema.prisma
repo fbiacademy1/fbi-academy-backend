@@ -62,7 +62,82 @@ model User {
   memberships             Membership[]
   sentDirectMessages      DirectMessage[] @relation("SentMessages")
   receivedDirectMessages  DirectMessage[] @relation("ReceivedMessages")
+  personalTrainingProfile PersonalTrainingProfile?
 
+}
+
+// A coach's public personal-training offering: who they are, their rates,
+// and whether they're currently accepting bookings. One per coach User,
+// created the first time that coach turns Personal Training on for
+// themselves (mobile app / web portal - see routes/personalTraining.js).
+// Not team-scoped: a coach's PT booking page is the same regardless of
+// which team(s) they coach.
+model PersonalTrainingProfile {
+  id             String   @id @default(cuid())
+  userId         String   @unique
+  user           User     @relation(fields: [userId], references: [id])
+  displayName    String
+  photoUrl       String?
+  bio            String?
+  phone          String?
+  // Per-session hourly rates, each set independently by the coach.
+  // groupRate is nullable - a coach who doesn't want to offer small-group
+  // sessions just never sets one, and the group option is hidden for them
+  // on the booking page.
+  individualRate Decimal  @db.Decimal(6, 2)
+  groupRate      Decimal? @db.Decimal(6, 2)
+  enabled        Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  slots    PTAvailabilitySlot[]
+  bookings PTBooking[]
+}
+
+// A single bookable window on a coach's calendar, created by the coach
+// ahead of time. sessionType/capacity unify the individual vs. small-group
+// case: an individual slot is just capacity 1. bookedCount is only ever
+// changed via the atomic raw-SQL update in POST /bookings (see
+// routes/personalTraining.js) so two simultaneous bookings can never both
+// land on the last open seat.
+model PTAvailabilitySlot {
+  id          String   @id @default(cuid())
+  profileId   String
+  profile     PersonalTrainingProfile @relation(fields: [profileId], references: [id])
+  startTime   DateTime
+  endTime     DateTime
+  sessionType String   @default("individual") // "individual" | "group"
+  capacity    Int      @default(1)
+  bookedCount Int      @default(0)
+  createdAt   DateTime @default(now())
+
+  bookings PTBooking[]
+
+  @@index([profileId, startTime])
+}
+
+// One player/family's booking of a seat in a slot. Several bookings can
+// point at the same group slot (up to its capacity); an individual slot
+// (capacity 1) only ever has one. requesterUserId is set when the booking
+// came from an already-logged-in TeamSync app user, left null for a public
+// website visitor who isn't a TeamSync account holder.
+model PTBooking {
+  id              String   @id @default(cuid())
+  slotId          String
+  slot            PTAvailabilitySlot @relation(fields: [slotId], references: [id])
+  profileId       String
+  profile         PersonalTrainingProfile @relation(fields: [profileId], references: [id])
+  requesterName   String
+  requesterEmail  String
+  requesterPhone  String?
+  playerName      String?
+  requesterUserId String?
+  notes           String?
+  status          String   @default("confirmed") // "confirmed" | "canceled"
+  createdAt       DateTime @default(now())
+
+  @@index([profileId])
+  @@index([slotId])
 }
 
 // Join model: one row per (user, team) pair, carrying that user's role on

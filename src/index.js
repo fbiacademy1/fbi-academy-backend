@@ -13,6 +13,7 @@ const syncRoutes = require("./routes/sync");
 const uploadRoutes = require("./routes/uploads");
 const trainingSessionRoutes = require("./routes/trainingSessions");
 const trainingVideoRoutes = require("./routes/trainingVideos");
+const personalTrainingRoutes = require("./routes/personalTraining");
 
 const app = express();
 app.use(cors());
@@ -41,6 +42,7 @@ app.use("/api/sync", syncRoutes);
 app.use("/api/uploads", uploadRoutes);
 app.use("/api/training-sessions", trainingSessionRoutes);
 app.use("/api/training-videos", trainingVideoRoutes);
+app.use("/api/personal-training", personalTrainingRoutes);
 
 // Centralized error handler
 app.use((err, req, res, next) => {
