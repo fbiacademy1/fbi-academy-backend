@@ -18,7 +18,21 @@ async function verifyWordpressCredentials(email, password) {
                 // dodge that heuristic. Do not rename this back to "/auth/login".
                 `${base}/auth/verify`,
           { email, password },
-          { headers: { "x-fbi-api-secret": secret }, timeout: 10000 }
+          {
+                headers: {
+                  "x-fbi-api-secret": secret,
+                  "Content-Type": "application/json",
+                  Accept: "application/json",
+                  // Same fix as wordpressSync.js (task #213): axios's default
+                  // User-Agent reads as bot traffic to Hostinger's protection,
+                  // which after the /auth/login rename started hard-resetting
+                  // the connection (ECONNRESET) instead of even serving a
+                  // challenge page. A normal browser User-Agent avoids that.
+                  "User-Agent":
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+                },
+                timeout: 10000,
+              }
               );
         if (!res.data || typeof res.data !== "object" || !res.data.id) {
                 // WordPress answered with HTTP 200 but not the JSON shape the Coach
