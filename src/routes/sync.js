@@ -1,7 +1,7 @@
 const express = require("express");
 const { requireWordpressSecret, requireFbiSecret } = require("../middleware/auth");
 const { applyWordpressWebhook } = require("../services/wordpressSync");
-const { applyWordpressTeamAssignment, applyWordpressCoachTeamAssignment, applyWordpressCreateTeam, applyWordpressGuardianLink, removeWordpressPlayer } = require("../services/teamAssignmentSync");
+const { applyWordpressTeamAssignment, applyWordpressCoachTeamAssignment, applyWordpressCreateTeam, applyWordpressDeleteTeam, applyWordpressGuardianLink, removeWordpressPlayer } = require("../services/teamAssignmentSync");
 const prisma = require("../db");
 
 const router = express.Router();
@@ -70,6 +70,21 @@ router.post("/wordpress-create-team", requireFbiSecret, async (req, res) => {
           console.error("[sync] create team webhook error:", err.message);
           res.status(400).json({ error: err.message });
     }
+});
+
+// POST /api/sync/wordpress-delete-team
+// Called by the Coach Portal's admin-only "Delete" button next to a team.
+// Body: { teamId }. Refuses (400, with a clear message) if the team still
+// has players rostered - see applyWordpressDeleteTeam for exactly what is
+// and isn't cleaned up.
+router.post("/wordpress-delete-team", requireFbiSecret, async (req, res) => {
+  try {
+    const result = await applyWordpressDeleteTeam(req.body);
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    console.error("[sync] delete team webhook error:", err.message);
+    res.status(400).json({ error: err.message });
+  }
 });
 
 // POST /api/sync/wordpress-guardian-link

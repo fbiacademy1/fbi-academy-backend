@@ -116,12 +116,61 @@ async function applyWordpressCoachTeamAssignment({ wpCoachId, email, firstName, 
 async function applyWordpressCreateTeam({ name, sport, season }) {
     if (!name) throw new Error("name is required");
     if (!sport) throw new Error("sport is required");
-  
-    const team = await prisma.team.create({
-          data: { name, sport, season: season || null },
+
+    // Case-insensitive, whitespace-trimmed duplicate check - "U10 Lions" and
+    // " u10 lions " should collide, not silently create a second team.
+    const trimmedName = name.trim();
+    const existing = await prisma.team.findFirst({
+          where: { name: { equals: trimmedName, mode: "insensitive" } },
     });
-  
+    if (existing) {
+          throw new Error(`A team named "${existing.name}" already exists.`);
+    }
+
+    const team = await prisma.team.create({
+          data: { name: trimmedName, sport, season: season || null },
+    });
+
     return { teamId: team.id, teamName: team.name, sport: team.sport, season: team.season };
+}
+
+/**
+ * Called from the Coach Portal's admin-only "Delete Team" action. Refuses
+ * (with a clear message) if the team still has any Player rows on its
+ * roster - same conservative stance as the rest of this file: nothing here
+ * silently deletes a player, a coach has to unroster/reassign them first.
+ * Once the roster really is empty, cleans up every other team-scoped row
+ * (events + their RSVPs/volunteer roles, team chat, direct messages, skill/
+ * training videos, and any coach/admin Memberships on this team) before
+ * deleting the Team row itself, since none of those relations cascade at
+ * the DB level.
+ */
+async function applyWordpressDeleteTeam({ teamId }) {
+  if (!teamId) throw new Error("teamId is required");
+
+  const team = await prisma.team.findUnique({ where: { id: teamId } });
+  if (!team) throw new Error("Team not found.");
+
+  const playerCount = await prisma.player.count({ where: { teamId } });
+  if (playerCount > 0) {
+    throw new Error(
+      `"${team.name}" still has ${playerCount} player${playerCount === 1 ? "" : "s"} on its roster. Remove or reassign them before deleting this team.`
+    );
+  }
+
+  await prisma.$transaction([
+    prisma.rSVP.deleteMany({ where: { event: { teamId } } }),
+    prisma.volunteerRole.deleteMany({ where: { event: { teamId } } }),
+    prisma.event.deleteMany({ where: { teamId } }),
+    prisma.message.deleteMany({ where: { teamId } }),
+    prisma.directMessage.deleteMany({ where: { teamId } }),
+    prisma.playerSkillVideo.deleteMany({ where: { teamId } }),
+    prisma.trainingVideo.deleteMany({ where: { teamId } }),
+    prisma.membership.deleteMany({ where: { teamId } }),
+    prisma.team.delete({ where: { id: teamId } }),
+  ]);
+
+  return { teamId, teamName: team.name };
 }
 
 /**
@@ -284,6 +333,7 @@ module.exports = {
   applyWordpressTeamAssignment,
   applyWordpressCoachTeamAssignment,
   applyWordpressCreateTeam,
+  applyWordpressDeleteTeam,
   applyWordpressGuardianLink,
   removeWordpressPlayer,
   pushTeamAssignmentToWordpress,
