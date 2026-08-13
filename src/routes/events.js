@@ -1,7 +1,7 @@
 const express = require("express");
 const crypto = require("crypto");
 const prisma = require("../db");
-const { requireAuth, requireTeamMembership, requireRole } = require("../middleware/auth");
+const { requireAuthAndTeam, requireRole } = require("../middleware/auth");
 const asyncHandler = require("../middleware/asyncHandler");
 const { sendTeamNotification } = require("../services/pushNotifications");
 const { notifyEventToFamilies } = require("../services/outboundNotifications");
@@ -9,7 +9,10 @@ const { notifyEventToFamilies } = require("../services/outboundNotifications");
 const TYPE_LABELS = { game: "Match", practice: "Training", event: "Team Function" };
 
 const router = express.Router();
-router.use(requireAuth, requireTeamMembership);
+// Accepts either a mobile-app JWT or the Coach Portal's server-to-server
+// fbi bridge (see requireAuthAndTeam) - both resolve to the same
+// req.user/req.membership shape, so every handler below is unchanged.
+router.use(requireAuthAndTeam);
 
 // How many occurrences to generate for each repeat frequency. Fixed rather
 // than open-ended so a recurring event can't silently create rows forever;

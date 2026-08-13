@@ -89,4 +89,70 @@ function requireFbiSecret(req, res, next) {
   next();
 }
 
-module.exports = { requireAuth, requireTeamMembership, requireRole, requireWordpressSecret, requireFbiSecret };
+// Combined auth for routes that need to work for BOTH the mobile app (JWT +
+// x-team-id/x-membership-id, resolved against a real Membership row) AND
+// the Coach Portal calling in server-to-server as a logged-in WordPress
+// coach (x-fbi-api-secret + x-fbi-coach-email + x-fbi-team-id, no JWT -
+// WordPress already did the real login/authorization, same trust level as
+// the other requireFbiSecret routes in sync.js).
+//
+// The WordPress path auto-provisions a TeamSync User (by email) and a
+// "coach" Membership on the given team if one doesn't exist yet, mirroring
+// the auto-provisioning pattern training-sessions-api uses for its embedded
+// auth - a coach who manages the schedule from the website but has never
+// opened the mobile app still gets a working, minimal identity here rather
+// than a confusing 403/404.
+//
+// Either path ends with the same req.user = { userId } / req.membership =
+// {..., teamId, role } shape, so existing route handlers (events.js, etc.)
+// don't need to know or care which caller they're serving.
+async function requireAuthAndTeam(req, res, next) {
+  const fbiSecret = req.headers["x-fbi-api-secret"];
+
+  if (fbiSecret) {
+    if (fbiSecret !== process.env.WORDPRESS_AUTH_BRIDGE_SECRET) {
+      return res.status(401).json({ error: "Invalid sync secret" });
+    }
+    const email = req.headers["x-fbi-coach-email"];
+    const teamId = req.headers["x-fbi-team-id"];
+    if (!email || !teamId) {
+      return res.status(400).json({ error: "Missing x-fbi-coach-email or x-fbi-team-id header" });
+    }
+    try {
+      const team = await prisma.team.findUnique({ where: { id: teamId } });
+      if (!team) return res.status(404).json({ error: "Team not found" });
+
+      let user = await prisma.user.findUnique({ where: { email } });
+      if (!user) {
+        user = await prisma.user.create({ data: { email } });
+      }
+
+      let membership = await prisma.membership.findFirst({ where: { userId: user.id, teamId } });
+      if (!membership) {
+        membership = await prisma.membership.create({ data: { userId: user.id, teamId, role: "coach" } });
+      }
+
+      req.user = { userId: user.id };
+      req.membership = membership;
+      req.isWordPressBridge = true;
+      return next();
+    } catch (err) {
+      return next(err);
+    }
+  }
+
+  // No fbi secret - fall back to the normal mobile-app path.
+  requireAuth(req, res, (err) => {
+    if (err) return next(err);
+    requireTeamMembership(req, res, next);
+  });
+}
+
+module.exports = {
+  requireAuth,
+  requireTeamMembership,
+  requireRole,
+  requireWordpressSecret,
+  requireFbiSecret,
+  requireAuthAndTeam,
+};
