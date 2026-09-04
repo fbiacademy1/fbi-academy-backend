@@ -457,6 +457,55 @@ router.delete("/:id/training-logs/:logId", asyncHandler(async (req, res) => {
   res.status(204).end();
 }));
 
+// POST /api/players/:id/videos  (admin/coach only) - assigns an individually
+// uploaded drill video to ONE player (distinct from /api/training-videos,
+// which is the team-wide shared library). url is expected to already be a
+// Supabase Storage URL returned by POST /api/uploads/video - this endpoint
+// just records the metadata, same pattern as training-videos.js.
+router.post("/:id/videos", requireRole("admin", "coach"), asyncHandler(async (req, res) => {
+  const player = await prisma.player.findUnique({ where: { id: req.params.id } });
+  if (!player || player.teamId !== req.membership.teamId) {
+    return res.status(404).json({ error: "Player not found" });
+  }
+
+  const { title, url } = req.body;
+  if (!title || !url) {
+    return res.status(400).json({ error: "title and url are required" });
+  }
+
+  const last = await prisma.playerVideo.aggregate({
+    where: { playerId: player.id },
+    _max: { position: true },
+  });
+
+  const video = await prisma.playerVideo.create({
+    data: {
+      playerId: player.id,
+      title,
+      url,
+      position: (last._max.position ?? -1) + 1,
+    },
+  });
+
+  res.status(201).json(video);
+}));
+
+// DELETE /api/players/:id/videos/:videoId  (admin/coach only)
+router.delete("/:id/videos/:videoId", requireRole("admin", "coach"), asyncHandler(async (req, res) => {
+  const player = await prisma.player.findUnique({ where: { id: req.params.id } });
+  if (!player || player.teamId !== req.membership.teamId) {
+    return res.status(404).json({ error: "Player not found" });
+  }
+
+  const video = await prisma.playerVideo.findUnique({ where: { id: req.params.videoId } });
+  if (!video || video.playerId !== player.id) {
+    return res.status(404).json({ error: "Video not found" });
+  }
+
+  await prisma.playerVideo.delete({ where: { id: video.id } });
+  res.status(204).end();
+}));
+
 // PATCH /api/players/:id/videos/:videoId/watched - toggle (or explicitly
 // set via body.watched) the "I watched this" mark on a per-player drill
 // video, mirroring the Player Portal's pp_watched_videos. Self or staff only.
