@@ -246,6 +246,10 @@ router.put("/:id", asyncHandler(async (req, res) => {
     firstName, lastName, email, phone, jerseyNumber, position,
     birthdate, photoUrl, favoritePlayerPhotoUrl, guardianName, guardianPhone, guardianEmail, emergencyContact, notes,
     leaderboardOptIn,
+    // Self-reported profile fields (Player Portal parity - see
+    // add-favorite-team.sql for the pp_* meta keys these mirror).
+    heightWeight, preferredFoot, improvementNotes,
+    favoriteTeamName, favoriteTeamPhotoUrl, favoritePlayerName,
   } = req.body;
 
   const updated = await prisma.player.update({
@@ -255,6 +259,8 @@ router.put("/:id", asyncHandler(async (req, res) => {
       birthdate: birthdate ? new Date(birthdate) : undefined,
       photoUrl, favoritePlayerPhotoUrl, guardianName, guardianPhone, guardianEmail, emergencyContact, notes,
       leaderboardOptIn,
+      heightWeight, preferredFoot, improvementNotes,
+      favoriteTeamName, favoriteTeamPhotoUrl, favoritePlayerName,
       syncStatus: "pending",
     },
   });
@@ -449,6 +455,34 @@ router.delete("/:id/training-logs/:logId", asyncHandler(async (req, res) => {
   }
   await prisma.playerTrainingLog.delete({ where: { id: log.id } });
   res.status(204).end();
+}));
+
+// PATCH /api/players/:id/videos/:videoId/watched - toggle (or explicitly
+// set via body.watched) the "I watched this" mark on a per-player drill
+// video, mirroring the Player Portal's pp_watched_videos. Self or staff only.
+router.patch("/:id/videos/:videoId/watched", asyncHandler(async (req, res) => {
+  const player = await prisma.player.findUnique({ where: { id: req.params.id } });
+  if (!player || player.teamId !== req.membership.teamId) {
+    return res.status(404).json({ error: "Player not found" });
+  }
+  const isStaff = ["admin", "coach"].includes(req.membership.role);
+  const isSelf = req.membership.playerId === player.id;
+  if (!isStaff && !isSelf) {
+    return res.status(403).json({ error: "You can only mark your own videos as watched" });
+  }
+
+  const video = await prisma.playerVideo.findUnique({ where: { id: req.params.videoId } });
+  if (!video || video.playerId !== player.id) {
+    return res.status(404).json({ error: "Video not found" });
+  }
+
+  const nextWatched = typeof req.body.watched === "boolean" ? req.body.watched : !video.watchedAt;
+  const updated = await prisma.playerVideo.update({
+    where: { id: video.id },
+    data: { watchedAt: nextWatched ? new Date() : null },
+  });
+
+  res.json(updated);
 }));
 
 // GET /api/players/:id/skill-tests - full skill-test history for a player,

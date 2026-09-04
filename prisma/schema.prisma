@@ -201,6 +201,24 @@ model Player {
   // player ranked unless this is explicitly turned on from their own profile.
   leaderboardOptIn      Boolean   @default(false)
 
+  // --- Self-reported profile fields (player edits these themselves) ---
+  // Ported from the WordPress Player Portal (player-profiles plugin) for
+  // feature parity - see PP_Roles::foot_options() for the preferredFoot
+  // value set ("Right" | "Left" | "Both"). Distinct from the same-named
+  // fields on PlayerEvaluation, which are a coach's snapshot AT evaluation
+  // time rather than an ongoing player-editable value.
+  heightWeight          String?
+  preferredFoot         String?
+  // Freeform "what do you want to work on" note, player-editable. Distinct
+  // from `notes` above, which is coach-facing internal roster notes.
+  improvementNotes      String?
+  // "Who do you support" - separate from favoritePlayerPhotoUrl (a photo of
+  // their favorite PRO PLAYER). Mirrors the Player Portal's pp_favorite_team
+  // / pp_favorite_player / pp_favorite_team_photo_id.
+  favoriteTeamName      String?
+  favoriteTeamPhotoUrl  String?
+  favoritePlayerName    String?
+
   // --- WordPress sync fields ---
   wordpressPostId  Int?
   lastSyncedHash   String?
@@ -268,6 +286,10 @@ model PlayerVideo {
   position  Int      @default(0)
   createdAt DateTime @default(now())
   trainingLogs PlayerTrainingLog[]
+  // Player-toggled "I watched this" mark, mirroring the Player Portal's
+  // pp_watched_videos. Null = not watched. Set/cleared by the player (or
+  // staff on their behalf) via PATCH /api/players/:id/videos/:videoId/watched.
+  watchedAt DateTime?
 
 }
 
