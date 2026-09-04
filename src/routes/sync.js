@@ -2,6 +2,7 @@ const express = require("express");
 const { requireWordpressSecret, requireFbiSecret } = require("../middleware/auth");
 const { applyWordpressWebhook } = require("../services/wordpressSync");
 const { applyWordpressTeamAssignment, applyWordpressCoachTeamAssignment, applyWordpressCreateTeam, applyWordpressDeleteTeam, applyWordpressGuardianLink, removeWordpressPlayer } = require("../services/teamAssignmentSync");
+const { applyWordpressEvaluations } = require("../services/evaluationSync");
 const prisma = require("../db");
 
 const router = express.Router();
@@ -116,6 +117,22 @@ router.post("/wordpress-player-removed", requireFbiSecret, async (req, res) => {
     res.json({ ok: true, ...result });
   } catch (err) {
     console.error("[sync] player removed webhook error:", err.message);
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// POST /api/sync/wordpress-evaluations
+// Called by the Coach Portal whenever a coach saves the "Player Evaluations
+// (QDE)" section on a player's Edit Player screen. Body: { wpPlayerId,
+// evaluations }. See applyWordpressEvaluations for exactly how this
+// reconciles - it's a two-way bridge, not a single shared database; see
+// evaluationSync.js for the full explanation and loop-safety notes.
+router.post("/wordpress-evaluations", requireFbiSecret, async (req, res) => {
+  try {
+    const result = await applyWordpressEvaluations(req.body);
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    console.error("[sync] evaluations webhook error:", err.message);
     res.status(400).json({ error: err.message });
   }
 });

@@ -4,6 +4,7 @@ const prisma = require("../db");
 const { requireAuth, requireTeamMembership, requireRole } = require("../middleware/auth");
 const { pushPlayerToWordpress } = require("../services/wordpressSync");
 const { pushTeamAssignmentToWordpress } = require("../services/teamAssignmentSync");
+const { pushEvaluationsToWordpress } = require("../services/evaluationSync");
 const asyncHandler = require("../middleware/asyncHandler");
 
 const router = express.Router();
@@ -358,6 +359,8 @@ router.post("/:id/evaluations", requireRole("admin", "coach"), asyncHandler(asyn
       receiving: Number(receiving), pressAfterLoss: Number(pressAfterLoss), concentration: Number(concentration),
     },
   });
+
+  pushEvaluationsToWordpress(player.id).catch((e) => console.error("[evaluationSync] push error:", e.message));
 
   res.status(201).json(evaluation);
 }));
