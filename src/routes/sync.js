@@ -49,6 +49,25 @@ router.get("/teams", requireFbiSecret, async (req, res) => {
   res.json(teams);
 });
 
+// GET /api/sync/team-players?teamId=<postgres team id>
+// Lets the website's "Upload Training Video" form (teamsync-sync.php) build
+// a player checklist for a chosen team without needing any JWT/session -
+// just the team's TeamSync id from GET /teams above. Only returns players
+// that actually have a WordPress login linked (wpPlayerId set), since
+// wpPlayerId is what wordpress-video-upload uses to map the checked boxes
+// back to Player rows.
+router.get("/team-players", requireFbiSecret, async (req, res) => {
+  const teamId = String(req.query.teamId || "").trim();
+  if (!teamId) return res.status(400).json({ error: "teamId is required" });
+
+  const players = await prisma.player.findMany({
+    where: { teamId, wpPlayerId: { not: null } },
+    select: { id: true, firstName: true, lastName: true, jerseyNumber: true, wpPlayerId: true },
+    orderBy: [{ lastName: "asc" }, { firstName: "asc" }],
+  });
+  res.json(players);
+});
+
 // POST /api/sync/wordpress-team-assignment
 // Called by the Coach Portal whenever a coach changes a player's team
 // assignments there. Body: { wpPlayerId, firstName, lastName, teamIds }.
