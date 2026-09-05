@@ -493,6 +493,54 @@ router.post("/:id/videos", requireRole("admin", "coach"), asyncHandler(async (re
   res.status(201).json(video);
 }));
 
+// POST /api/players/videos/bulk-assign  (admin/coach only) - assigns ONE
+// already-uploaded video (url from POST /api/uploads/video) to MANY players
+// at once, e.g. "send this drill clip to the whole team" or a coach-picked
+// subset. Creates one PlayerVideo row per playerId, all pointing at the same
+// url, so each player's own video list/position-ordering keeps working
+// exactly like a normal single-player upload. Silently skips any playerId
+// that isn't a real player on the caller's team rather than failing the
+// whole batch, so "select all" from a slightly stale roster list still works.
+router.post("/videos/bulk-assign", requireRole("admin", "coach"), asyncHandler(async (req, res) => {
+  const { playerIds, title, url } = req.body;
+  if (!title || !url) {
+    return res.status(400).json({ error: "title and url are required" });
+  }
+  if (!Array.isArray(playerIds) || playerIds.length === 0) {
+    return res.status(400).json({ error: "playerIds must be a non-empty array" });
+  }
+
+  const players = await prisma.player.findMany({
+    where: { id: { in: playerIds }, teamId: req.membership.teamId },
+    select: { id: true },
+  });
+  if (players.length === 0) {
+    return res.status(404).json({ error: "None of the selected players were found on this team" });
+  }
+
+  const lastPositions = await prisma.playerVideo.groupBy({
+    by: ["playerId"],
+    where: { playerId: { in: players.map((p) => p.id) } },
+    _max: { position: true },
+  });
+  const posByPlayer = new Map(lastPositions.map((row) => [row.playerId, row._max.position ?? -1]));
+
+  const videos = await prisma.$transaction(
+    players.map((p) =>
+      prisma.playerVideo.create({
+        data: {
+          playerId: p.id,
+          title,
+          url,
+          position: (posByPlayer.get(p.id) ?? -1) + 1,
+        },
+      })
+    )
+  );
+
+  res.status(201).json({ count: videos.length, videos });
+}));
+
 // DELETE /api/players/:id/videos/:videoId  (admin/coach only)
 router.delete("/:id/videos/:videoId", requireRole("admin", "coach"), asyncHandler(async (req, res) => {
   const player = await prisma.player.findUnique({ where: { id: req.params.id } });
