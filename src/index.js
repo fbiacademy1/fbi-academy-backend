@@ -46,10 +46,14 @@ app.use("/api/training-videos", trainingVideoRoutes);
 app.use("/api/personal-training", personalTrainingRoutes);
 app.use("/api/skill-videos", skillVideoRoutes);
 
-// Centralized error handler
+// Centralized error handler. Respects err.statusCode/err.message when a
+// route deliberately threw a typed error (e.g. auth.js's login route for a
+// WordPress-unreachable condition) so the client gets something more useful
+// than a bare 500 - falls back to the old generic 500 for anything else.
 app.use((err, req, res, next) => {
   console.error(err);
-  res.status(500).json({ error: "Internal server error" });
+  const status = err.statusCode || 500;
+  res.status(status).json({ error: status === 500 ? "Internal server error" : err.message });
 });
 
 const PORT = process.env.PORT || 4000;

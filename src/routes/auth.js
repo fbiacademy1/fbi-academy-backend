@@ -71,7 +71,20 @@ router.post("/login", asyncHandler(async (req, res) => {
   const { email, password } = req.body;
   if (!email || !password) return res.status(400).json({ error: "email and password required" });
 
-  const wpUser = await verifyWordpressCredentials(email, password);
+  let wpUser;
+  try {
+    wpUser = await verifyWordpressCredentials(email, password);
+  } catch (err) {
+    // verifyWordpressCredentials already retried a few times internally -
+    // this only happens once those retries are exhausted on a pure network
+    // failure reaching WordPress (see wordpressAuth.js), not a credentials
+    // problem. 503 + a clear message beats a bare 500 "Internal server
+    // error" for something the user can meaningfully retry in a moment.
+    if (err.isWpUnreachable) {
+      return res.status(503).json({ error: "Login is temporarily unavailable - please try again in a moment." });
+    }
+    throw err;
+  }
   if (!wpUser) return res.status(401).json({ error: "Invalid credentials" });
 
   let user = await prisma.user.findUnique({ where: { wpUserId: wpUser.id } });
