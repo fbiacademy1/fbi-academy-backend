@@ -1,11 +1,27 @@
 const express = require("express");
+const multer = require("multer");
+const crypto = require("crypto");
 const { requireWordpressSecret, requireFbiSecret } = require("../middleware/auth");
 const { applyWordpressWebhook } = require("../services/wordpressSync");
 const { applyWordpressTeamAssignment, applyWordpressCoachTeamAssignment, applyWordpressCreateTeam, applyWordpressDeleteTeam, applyWordpressGuardianLink, removeWordpressPlayer } = require("../services/teamAssignmentSync");
 const { applyWordpressEvaluations } = require("../services/evaluationSync");
+const { getSupabase } = require("../supabase");
 const prisma = require("../db");
 
 const router = express.Router();
+
+// Same 150MB/video-mimetype limit as POST /api/uploads/video - see that
+// route's comment for why. Kept as its own multer instance here (rather
+// than importing uploads.js's) so this file's dependencies stay self-
+// contained and the two routers can evolve independently.
+const uploadVideo = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 150 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    if (!file.mimetype.startsWith("video/")) return cb(new Error("Only video uploads are allowed"));
+    cb(null, true);
+  },
+});
 
 // POST /api/sync/webhook/wordpress
 // Called by the TeamSync WordPress plugin whenever a player_profile post
@@ -136,5 +152,94 @@ router.post("/wordpress-evaluations", requireFbiSecret, async (req, res) => {
     res.status(400).json({ error: err.message });
   }
 });
+
+// POST /api/sync/wordpress-video-upload
+// Called by the Coach Portal's website "Upload Training Video" form
+// (teamsync-sync.php) when a coach/admin picks a real video FILE (not a
+// pasted YouTube/Vimeo link) and chooses which players it goes to - the
+// website equivalent of the mobile app's Bulk Video Upload screen /
+// POST /api/players/videos/bulk-assign. The website has no JWT to act as a
+// TeamSync user, so this goes through the same shared-secret bridge as the
+// other wordpress-* routes above instead of requireAuth.
+//
+// multipart/form-data body:
+//   video        - the file itself, field name "video"
+//   title        - video title
+//   wpPlayerIds  - comma-separated WordPress user IDs of the target players
+//   teamId       - optional TeamSync (Postgres) team id, same id WordPress
+//                  already sends as part of teamIds in
+//                  wordpress-team-assignment above. If a person has a Player
+//                  row on more than one team (same wpPlayerId), this narrows
+//                  the match to just the team the coach was viewing. Omit to
+//                  match ALL of that person's teams (rare, but harmless for
+//                  a single-team club).
+router.post(
+  "/wordpress-video-upload",
+  requireFbiSecret,
+  uploadVideo.single("video"),
+  async (req, res) => {
+    if (!req.file) return res.status(400).json({ error: "No video file provided" });
+
+    const title = (req.body.title || "").trim();
+    if (!title) return res.status(400).json({ error: "title is required" });
+
+    const wpPlayerIds = String(req.body.wpPlayerIds || "")
+      .split(",")
+      .map((s) => parseInt(s.trim(), 10))
+      .filter((n) => Number.isInteger(n));
+    if (wpPlayerIds.length === 0) {
+      return res.status(400).json({ error: "wpPlayerIds is required" });
+    }
+
+    try {
+      const bucket = process.env.SUPABASE_VIDEO_BUCKET || "training-videos";
+      const ext = (req.file.originalname.match(/\.[a-zA-Z0-9]+$/) || [".mp4"])[0];
+      const filename = `${Date.now()}-${crypto.randomBytes(6).toString("hex")}${ext}`;
+
+      const supabase = getSupabase();
+      const { error: uploadError } = await supabase.storage
+        .from(bucket)
+        .upload(filename, req.file.buffer, { contentType: req.file.mimetype, upsert: false });
+      if (uploadError) {
+        console.error("[sync] video upload failed:", uploadError.message);
+        return res.status(502).json({ error: "Upload failed - try again" });
+      }
+      const { data: publicUrlData } = supabase.storage.from(bucket).getPublicUrl(filename);
+      const url = publicUrlData.publicUrl;
+
+      const teamId = req.body.teamId ? String(req.body.teamId).trim() : null;
+      const players = await prisma.player.findMany({
+        where: {
+          wpPlayerId: { in: wpPlayerIds },
+          ...(teamId ? { teamId } : {}),
+        },
+        select: { id: true },
+      });
+      if (players.length === 0) {
+        return res.status(404).json({ error: "None of the selected players were found" });
+      }
+
+      const lastPositions = await prisma.playerVideo.groupBy({
+        by: ["playerId"],
+        where: { playerId: { in: players.map((p) => p.id) } },
+        _max: { position: true },
+      });
+      const posByPlayer = new Map(lastPositions.map((row) => [row.playerId, row._max.position ?? -1]));
+
+      const videos = await prisma.$transaction(
+        players.map((p) =>
+          prisma.playerVideo.create({
+            data: { playerId: p.id, title, url, position: (posByPlayer.get(p.id) ?? -1) + 1 },
+          })
+        )
+      );
+
+      res.status(201).json({ ok: true, count: videos.length, url });
+    } catch (err) {
+      console.error("[sync] video upload error:", err.message);
+      res.status(500).json({ error: err.message });
+    }
+  }
+);
 
 module.exports = router;
