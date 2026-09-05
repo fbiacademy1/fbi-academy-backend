@@ -15,6 +15,7 @@ const trainingSessionRoutes = require("./routes/trainingSessions");
 const trainingVideoRoutes = require("./routes/trainingVideos");
 const personalTrainingRoutes = require("./routes/personalTraining");
 const skillVideoRoutes = require("./routes/skillVideos");
+const debugRoutes = require("./routes/debug");
 
 const app = express();
 app.use(cors());
@@ -45,6 +46,7 @@ app.use("/api/training-sessions", trainingSessionRoutes);
 app.use("/api/training-videos", trainingVideoRoutes);
 app.use("/api/personal-training", personalTrainingRoutes);
 app.use("/api/skill-videos", skillVideoRoutes);
+app.use("/api/debug", debugRoutes);
 
 // Centralized error handler. Respects err.statusCode/err.message when a
 // route deliberately threw a typed error (e.g. auth.js's login route for a
