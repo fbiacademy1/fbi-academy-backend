@@ -274,9 +274,14 @@ model PlayerSkillVideo {
   @@index([status])
 }
 
-// A video link shown on a player's profile (title + URL, e.g. YouTube/Vimeo).
-// WordPress is the source of truth for these - the coach adds them on the
-// player's WordPress profile, and they sync into the app via the webhook.
+// A video link shown on a player's profile (title + URL, e.g. YouTube/Vimeo,
+// or a direct Supabase Storage file). This is now the SINGLE source of truth
+// for a player's training videos across every surface - mobile app, App
+// Portal, and the WordPress Player Portal (which used to keep its own
+// separate copy in pp_videos user meta; see includes/class-pp-shortcode.php
+// and class-pp-admin-fields.php in the player-profiles WP plugin, which read/
+// write this table over the shared-secret bridge instead as of the
+// 2026-09-05 unification - see routes/sync.js's /player-videos endpoints).
 model PlayerVideo {
   id        String   @id @default(cuid())
   playerId  String
@@ -286,10 +291,17 @@ model PlayerVideo {
   position  Int      @default(0)
   createdAt DateTime @default(now())
   trainingLogs PlayerTrainingLog[]
-  // Player-toggled "I watched this" mark, mirroring the Player Portal's
+  // Player-toggled "I watched this" mark, mirroring the Player Portal's old
   // pp_watched_videos. Null = not watched. Set/cleared by the player (or
-  // staff on their behalf) via PATCH /api/players/:id/videos/:videoId/watched.
+  // staff on their behalf) via PATCH /api/players/:id/videos/:videoId/watched
+  // (JWT surfaces) or PATCH /api/sync/player-videos/:id/watched (WordPress).
   watchedAt DateTime?
+  // Ported from the WordPress Player Portal's pp_videos entry shape (each
+  // video could carry player-facing instructions and a link to the matching
+  // In-Real-Futbol drill page) so nothing is lost in the 2026-09-05
+  // unification. Both optional/unused by the mobile app today.
+  instructions String?
+  irfUrl       String?
 
 }
 

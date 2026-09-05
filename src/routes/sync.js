@@ -261,4 +261,148 @@ router.post(
   }
 );
 
+// --- Player Portal training videos (2026-09-05 unification) ---------------
+// The WordPress Player Portal (player-profiles plugin's [player_portal]
+// shortcode) used to keep its own separate copy of each player's training
+// videos in pp_videos/pp_watched_videos user meta - completely disconnected
+// from this PlayerVideo table, which the mobile app, App Portal, and the
+// website's "Upload Training Video" form (wordpress-video-upload above) all
+// already use. That meant a video assigned on one surface silently never
+// showed up on the others. These four endpoints let the WordPress plugin
+// read/write PlayerVideo directly instead, keyed by wpPlayerId (the WP user
+// id) same as every other wordpress-* route in this file, so there is now
+// exactly one training-video list per player, shared everywhere.
+
+// GET /api/sync/player-videos?wpPlayerId=<wp user id>
+router.get("/player-videos", requireFbiSecret, async (req, res) => {
+  const wpPlayerId = parseInt(req.query.wpPlayerId, 10);
+  if (!Number.isInteger(wpPlayerId)) {
+    return res.status(400).json({ error: "wpPlayerId is required" });
+  }
+
+  const player = await prisma.player.findFirst({ where: { wpPlayerId } });
+  if (!player) {
+    // Not an error - a WP player who hasn't been synced/rostered into
+    // TeamSync yet just has an empty video list, same as "no videos assigned".
+    return res.json({ videos: [] });
+  }
+
+  const videos = await prisma.playerVideo.findMany({
+    where: { playerId: player.id },
+    orderBy: { position: "asc" },
+  });
+  res.json({ videos });
+});
+
+// POST /api/sync/player-videos
+// Body: { wpPlayerId, title, url, instructions?, irfUrl? }
+// Used by the Player Portal's wp-admin "Training Videos" repeater (Edit User
+// screen) to add a video for one player, same shared-secret bridge pattern
+// as wordpress-video-upload above.
+router.post("/player-videos", requireFbiSecret, async (req, res) => {
+  const wpPlayerId = parseInt(req.body.wpPlayerId, 10);
+  const title = (req.body.title || "").trim();
+  const url = (req.body.url || "").trim();
+  if (!Number.isInteger(wpPlayerId) || !title || !url) {
+    return res.status(400).json({ error: "wpPlayerId, title, and url are required" });
+  }
+
+  const player = await prisma.player.findFirst({ where: { wpPlayerId } });
+  if (!player) {
+    return res.status(404).json({ error: "No TeamSync player found for that wpPlayerId" });
+  }
+
+  const last = await prisma.playerVideo.aggregate({
+    where: { playerId: player.id },
+    _max: { position: true },
+  });
+
+  const video = await prisma.playerVideo.create({
+    data: {
+      playerId: player.id,
+      title,
+      url,
+      instructions: req.body.instructions || undefined,
+      irfUrl: req.body.irfUrl || undefined,
+      position: (last._max.position ?? -1) + 1,
+    },
+  });
+  res.status(201).json(video);
+});
+
+// PUT /api/sync/player-videos/:id
+// Body: { wpPlayerId, title?, url?, instructions?, irfUrl? } - edits an
+// existing video. wpPlayerId is required as a lightweight ownership check
+// (this route has no per-user session to authorize against otherwise).
+router.put("/player-videos/:id", requireFbiSecret, async (req, res) => {
+  const wpPlayerId = parseInt(req.body.wpPlayerId, 10);
+  if (!Number.isInteger(wpPlayerId)) {
+    return res.status(400).json({ error: "wpPlayerId is required" });
+  }
+
+  const video = await prisma.playerVideo.findUnique({
+    where: { id: req.params.id },
+    include: { player: true },
+  });
+  if (!video || video.player.wpPlayerId !== wpPlayerId) {
+    return res.status(404).json({ error: "Video not found" });
+  }
+
+  const updated = await prisma.playerVideo.update({
+    where: { id: video.id },
+    data: {
+      title: req.body.title || undefined,
+      url: req.body.url || undefined,
+      instructions: "instructions" in req.body ? req.body.instructions || null : undefined,
+      irfUrl: "irfUrl" in req.body ? req.body.irfUrl || null : undefined,
+    },
+  });
+  res.json(updated);
+});
+
+// DELETE /api/sync/player-videos/:id?wpPlayerId=<wp user id>
+router.delete("/player-videos/:id", requireFbiSecret, async (req, res) => {
+  const wpPlayerId = parseInt(req.query.wpPlayerId, 10);
+  if (!Number.isInteger(wpPlayerId)) {
+    return res.status(400).json({ error: "wpPlayerId is required" });
+  }
+
+  const video = await prisma.playerVideo.findUnique({
+    where: { id: req.params.id },
+    include: { player: true },
+  });
+  if (!video || video.player.wpPlayerId !== wpPlayerId) {
+    return res.status(404).json({ error: "Video not found" });
+  }
+
+  await prisma.playerVideo.delete({ where: { id: video.id } });
+  res.status(204).end();
+});
+
+// PATCH /api/sync/player-videos/:id/watched
+// Body: { wpPlayerId, watched? } - the Player Portal's "Mark as Watched"
+// button, mirroring PATCH /api/players/:id/videos/:videoId/watched (the
+// JWT-authenticated equivalent used by the mobile app/App Portal).
+router.patch("/player-videos/:id/watched", requireFbiSecret, async (req, res) => {
+  const wpPlayerId = parseInt(req.body.wpPlayerId, 10);
+  if (!Number.isInteger(wpPlayerId)) {
+    return res.status(400).json({ error: "wpPlayerId is required" });
+  }
+
+  const video = await prisma.playerVideo.findUnique({
+    where: { id: req.params.id },
+    include: { player: true },
+  });
+  if (!video || video.player.wpPlayerId !== wpPlayerId) {
+    return res.status(404).json({ error: "Video not found" });
+  }
+
+  const nextWatched = typeof req.body.watched === "boolean" ? req.body.watched : !video.watchedAt;
+  const updated = await prisma.playerVideo.update({
+    where: { id: video.id },
+    data: { watchedAt: nextWatched ? new Date() : null },
+  });
+  res.json(updated);
+});
+
 module.exports = router;
